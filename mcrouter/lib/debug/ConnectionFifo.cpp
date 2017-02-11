@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -9,10 +9,18 @@
  */
 #include "ConnectionFifo.h"
 
+#include <chrono>
+
 namespace facebook {
 namespace memcache {
 
 namespace {
+
+uint64_t timeSinceEpoch() {
+  using namespace std::chrono;
+  return duration_cast<microseconds>(steady_clock::now().time_since_epoch())
+      .count();
+}
 
 class PipeIov {
  public:
@@ -112,15 +120,25 @@ MessageHeader buildMsgHeader(const folly::AsyncTransportWrapper* transport) {
     folly::SocketAddress address;
 
     transport->getPeerAddress(&address);
-    address.getAddressStr(
-        header.peerIpAddressModifiable(), MessageHeader::kIpAddressMaxSize);
-    header.setPeerPort(address.getPort());
+    if (address.getFamily() == AF_INET || address.getFamily() == AF_INET6) {
+      address.getAddressStr(
+          header.peerAddressModifiable(), MessageHeader::kAddressMaxSize);
+      header.setPeerPort(address.getPort());
+    } else if (address.getFamily() == AF_UNIX) {
+      // For unix sockets, just localAddress has the path.
+      transport->getLocalAddress(&address);
+      std::snprintf(
+          header.peerAddressModifiable(),
+          MessageHeader::kAddressMaxSize,
+          "%s%s",
+          kUnixSocketPrefix.data(),
+          address.getPath().c_str());
+    }
 
     transport->getLocalAddress(&address);
     header.setLocalPort(address.getPort());
   } catch (const std::exception& e) {
-    LOG(WARNING) << "Error getting host/port to write to debug fifo: "
-                 << e.what();
+    VLOG(2) << "Error getting host/port to write to debug fifo: " << e.what();
   }
 
   return header;
@@ -140,11 +158,15 @@ bool ConnectionFifo::isConnected() const noexcept {
   return debugFifo_ && debugFifo_->isConnected();
 }
 
-bool ConnectionFifo::startMessage(MessageDirection direction) noexcept {
+bool ConnectionFifo::startMessage(
+    MessageDirection direction,
+    uint32_t typeId) noexcept {
   if (!isConnected()) {
     return false;
   }
   currentMessageHeader_.setDirection(direction);
+  currentMessageHeader_.setTypeId(typeId);
+  currentMessageHeader_.setTimeUs(timeSinceEpoch());
   nextPacketId_ = 0;
   return true;
 }
@@ -173,6 +195,11 @@ bool ConnectionFifo::writeData(
   //      - peer port       - Peer port used for communication.
   //      - connection id   - Id of the connection that this message belongs to.
   //      - local port      - Local port used for communication.
+  //      - direction       - Direction of the message (sent or received).
+  //      - type id         - Id of the type of the request. For requests,
+  //                          it's always odd, for responses it's reqTypeId + 1.
+  //      - time            - Time in micros since epoch of when the message
+  //                          originated.
   //  - After the message header, the data of the message is divided in
   //    packets of at most PIPE_BUF bytes.
   //  - Each packet is composed of two parts: header and body.
@@ -202,7 +229,7 @@ bool ConnectionFifo::writeData(
   // | PACKET HEADER | PACKET BODY |
   // -------------------------------
 
-  if (!isConnected()) {
+  if (!isConnected() || iovcnt == 0) {
     return false;
   }
 
@@ -226,8 +253,8 @@ bool ConnectionFifo::writeData(
   while (iovIter.hasData()) {
     // Build pipeIov
     while (iovIter.hasData() && !pipeIov.full()) {
-      auto bytesAppended = pipeIov.append(iovIter.currentBuffer(),
-                                          iovIter.currentBufferLength());
+      auto bytesAppended = pipeIov.append(
+          iovIter.currentBuffer(), iovIter.currentBufferLength());
       iovIter.advance(bytesAppended);
       packetSize += bytesAppended;
     }

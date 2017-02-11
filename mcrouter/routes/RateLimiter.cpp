@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -13,15 +13,17 @@
 #include <vector>
 
 #include <folly/Conv.h>
-#include <folly/dynamic.h>
 #include <folly/String.h>
+#include <folly/dynamic.h>
 
 #include "mcrouter/lib/fbi/cpp/util.h"
 
 using folly::dynamic;
 using std::string;
 
-namespace facebook { namespace memcache { namespace mcrouter {
+namespace facebook {
+namespace memcache {
+namespace mcrouter {
 
 namespace {
 
@@ -32,8 +34,8 @@ double asPositiveDouble(const dynamic& obj, const string& keyName) {
   return d;
 }
 
-double asPositiveDoubleDefault(const dynamic& obj, const string& keyName,
-                               double def) {
+double
+asPositiveDoubleDefault(const dynamic& obj, const string& keyName, double def) {
   if (obj.count(keyName) && obj[keyName].isNumber()) {
     auto d = obj[keyName].asDouble();
     checkLogic(d > 0.0, "{} is nonpositive", keyName);
@@ -47,24 +49,24 @@ double asPositiveDoubleDefault(const dynamic& obj, const string& keyName,
 RateLimiter::RateLimiter(const folly::dynamic& json) {
   checkLogic(json.isObject(), "RateLimiter settings json is not an object");
 
-  auto now = TokenBucket::defaultClockNow();
+  auto now = folly::TokenBucket::defaultClockNow();
 
   if (json.count("gets_rate")) {
     double rate = asPositiveDouble(json, "gets_rate");
     double burst = asPositiveDoubleDefault(json, "gets_burst", rate);
-    getsTb_ = TokenBucket(rate, burst, now);
+    getsTb_ = folly::TokenBucket(rate, burst, now);
   }
 
   if (json.count("sets_rate")) {
     double rate = asPositiveDouble(json, "sets_rate");
     double burst = asPositiveDoubleDefault(json, "sets_burst", rate);
-    setsTb_ = TokenBucket(rate, burst, now);
+    setsTb_ = folly::TokenBucket(rate, burst, now);
   }
 
   if (json.count("deletes_rate")) {
     double rate = asPositiveDouble(json, "deletes_rate");
     double burst = asPositiveDoubleDefault(json, "deletes_burst", rate);
-    deletesTb_ = TokenBucket(rate, burst, now);
+    deletesTb_ = folly::TokenBucket(rate, burst, now);
   }
 }
 
@@ -84,5 +86,6 @@ std::string RateLimiter::toDebugStr() const {
   }
   return folly::join('|', pieces);
 }
-
-}}}  // facebook::memcache::mcrouter
+}
+}
+} // facebook::memcache::mcrouter

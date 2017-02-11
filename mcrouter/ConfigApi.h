@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -24,7 +24,8 @@ namespace folly {
 struct dynamic;
 } // folly
 
-namespace facebook { namespace memcache {
+namespace facebook {
+namespace memcache {
 
 class McrouterOptions;
 
@@ -57,8 +58,8 @@ class ConfigApi : public ConfigApiIf {
    *
    * @return true on success, false otherwise
    */
-  bool get(ConfigType type, const std::string& path,
-           std::string& contents) override;
+  bool get(ConfigType type, const std::string& path, std::string& contents)
+      override;
 
   /**
    * All files we 'get' after this call will be marked as 'tracked'. Once
@@ -82,9 +83,10 @@ class ConfigApi : public ConfigApiIf {
    * Reads configuration file according to mcrouter options.
    *
    * @param[out] config Will contain contents of configuration file on success
+   * @param[out] path Will contain path of configuration file we tried to read
    * @return true on success, false otherwise
    */
-  bool getConfigFile(std::string& config) override;
+  bool getConfigFile(std::string& config, std::string& path) override;
 
   /**
    * @return dynamic object with information about files used in configuration.
@@ -143,5 +145,6 @@ class ConfigApi : public ConfigApiIf {
 
   void configThreadRun();
 };
-
-}}} // facebook::memcache::mcrouter
+}
+}
+} // facebook::memcache::mcrouter

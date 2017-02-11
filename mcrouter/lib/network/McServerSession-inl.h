@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -11,19 +11,21 @@
 
 #include <memory>
 
+#include "mcrouter/lib/network/CarbonMessageList.h"
 #include "mcrouter/lib/network/McServerRequestContext.h"
 #include "mcrouter/lib/network/MultiOpParent.h"
-#include "mcrouter/lib/network/ThriftMessageList.h"
 
-namespace facebook { namespace memcache {
+namespace facebook {
+namespace memcache {
 
-template <class ThriftType>
-void McServerSession::asciiRequestReady(TypedThriftRequest<ThriftType>&& req,
-                                        mc_res_t result,
-                                        bool noreply) {
+template <class Request>
+void McServerSession::asciiRequestReady(
+    Request&& req,
+    mc_res_t result,
+    bool noreply) {
   DestructorGuard dg(this);
 
-  using Reply = ReplyT<TypedThriftRequest<ThriftType>>;
+  using Reply = ReplyT<Request>;
 
   assert(parser_.protocol() == mc_ascii_protocol);
   assert(!parser_.outOfOrder());
@@ -32,18 +34,15 @@ void McServerSession::asciiRequestReady(TypedThriftRequest<ThriftType>&& req,
     return;
   }
 
-  if (GetLike<TypedThriftRequest<ThriftType>>::value && !currentMultiop_) {
+  if (carbon::GetLike<Request>::value && !currentMultiop_) {
     currentMultiop_ = std::make_shared<MultiOpParent>(*this, tailReqid_++);
   }
   uint64_t reqid;
   reqid = tailReqid_++;
 
-  /* We need op in order for the reply to be handled correctly */
-  static constexpr mc_op_t op = OpFromType<ThriftType, RequestOpMapping>::value;
-  McServerRequestContext ctx(*this, op, reqid, noreply, currentMultiop_);
+  McServerRequestContext ctx(*this, reqid, noreply, currentMultiop_);
 
-  ctx.asciiKey().emplace();
-  req.key().cloneOneInto(ctx.asciiKey().value());
+  ctx.asciiKey().emplace(req.key().raw().cloneOneAsValue());
 
   if (result == mc_res_bad_key) {
     McServerRequestContext::reply(std::move(ctx), Reply(mc_res_bad_key));
@@ -52,12 +51,9 @@ void McServerSession::asciiRequestReady(TypedThriftRequest<ThriftType>&& req,
   }
 }
 
-template <class ThriftType>
-void McServerSession::umbrellaRequestReady(TypedThriftRequest<ThriftType>&& req,
-                                           uint64_t reqid) {
+template <class Request>
+void McServerSession::umbrellaRequestReady(Request&& req, uint64_t reqid) {
   DestructorGuard dg(this);
-
-  using Reply = ReplyT<TypedThriftRequest<ThriftType>>;
 
   assert(parser_.protocol() == mc_umbrella_protocol);
   assert(parser_.outOfOrder());
@@ -66,26 +62,46 @@ void McServerSession::umbrellaRequestReady(TypedThriftRequest<ThriftType>&& req,
     return;
   }
 
-  /* We need op in order for the reply to be handled correctly */
-  static constexpr mc_op_t op = OpFromType<ThriftType, RequestOpMapping>::value;
-  McServerRequestContext ctx(*this, op, reqid, false /* noreply */,
-                             nullptr /* MultiOpParent */);
+  McServerRequestContext ctx(*this, reqid);
 
-  if (ctx.operation_ == mc_op_version && options_.defaultVersionHandler) {
-    // Handle version command only if the user doesn't want to handle it
-    // themselves.
-    Reply versionReply(mc_res_ok);
-    versionReply.setValue(options_.versionString);
+  umbrellaRequestReadyImpl(std::move(ctx), std::move(req));
+}
+
+template <class Request>
+void McServerSession::umbrellaRequestReadyImpl(
+    McServerRequestContext&& ctx,
+    Request&& req) {
+  onRequest_->requestReady(std::move(ctx), std::move(req));
+}
+
+template <>
+inline void McServerSession::umbrellaRequestReadyImpl(
+    McServerRequestContext&& ctx,
+    McVersionRequest&& req) {
+  if (options_.defaultVersionHandler) {
+    McVersionReply versionReply(mc_res_ok);
+    versionReply.value() =
+        folly::IOBuf(folly::IOBuf::COPY_BUFFER, options_.versionString);
     McServerRequestContext::reply(std::move(ctx), std::move(versionReply));
-  } else if (ctx.operation_ == mc_op_quit) {
-    McServerRequestContext::reply(std::move(ctx), Reply(mc_res_ok));
-    close();
-  } else if (ctx.operation_ == mc_op_shutdown) {
-    McServerRequestContext::reply(std::move(ctx), Reply(mc_res_ok));
-    stateCb_.onShutdown();
   } else {
     onRequest_->requestReady(std::move(ctx), std::move(req));
   }
 }
 
-}} // facebook::memcache
+template <>
+inline void McServerSession::umbrellaRequestReadyImpl(
+    McServerRequestContext&& ctx,
+    McQuitRequest&& /* req */) {
+  McServerRequestContext::reply(std::move(ctx), McQuitReply(mc_res_ok));
+  close();
+}
+
+template <>
+inline void McServerSession::umbrellaRequestReadyImpl(
+    McServerRequestContext&& ctx,
+    McShutdownRequest&& /* req */) {
+  McServerRequestContext::reply(std::move(ctx), McShutdownReply(mc_res_ok));
+  stateCb_.onShutdown();
+}
+}
+} // facebook::memcache

@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -12,22 +12,21 @@
 #include <memory>
 #include <string>
 
-#include <folly/experimental/fibers/FiberManager.h>
+#include <folly/fibers/FiberManager.h>
 #include <folly/io/IOBuf.h>
 
-#include "mcrouter/lib/fbi/cpp/util.h"
-#include "mcrouter/lib/mc/msg.h"
 #include "mcrouter/lib/McOperation.h"
-#include "mcrouter/lib/McReply.h"
-#include "mcrouter/lib/McRequest.h"
-#include "mcrouter/lib/network/gen-cpp2/mc_caret_protocol_types.h"
-#include "mcrouter/lib/network/TypedThriftMessage.h"
+#include "mcrouter/lib/McResUtil.h"
 #include "mcrouter/lib/Operation.h"
-#include "mcrouter/lib/OperationTraits.h"
 #include "mcrouter/lib/Reply.h"
 #include "mcrouter/lib/RouteHandleTraverser.h"
+#include "mcrouter/lib/fbi/cpp/util.h"
+#include "mcrouter/lib/mc/msg.h"
+#include "mcrouter/lib/network/gen/Memcache.h"
 
-namespace facebook { namespace memcache { namespace mcrouter {
+namespace facebook {
+namespace memcache {
+namespace mcrouter {
 
 /**
  * This route handle allows for substantial changes in the number of boxes in
@@ -60,188 +59,102 @@ namespace facebook { namespace memcache { namespace mcrouter {
 template <class RouteHandleIf>
 class WarmUpRoute {
  public:
-  static std::string routeName() { return "warm-up"; }
+  static std::string routeName() {
+    return "warm-up";
+  }
 
   template <class Request>
-  void traverse(const Request& req,
-                const RouteHandleTraverser<RouteHandleIf>& t) const {
+  void traverse(
+      const Request& req,
+      const RouteHandleTraverser<RouteHandleIf>& t) const {
     t(*cold_, req);
     t(*warm_, req);
   }
 
-  WarmUpRoute(std::shared_ptr<RouteHandleIf> warm,
-              std::shared_ptr<RouteHandleIf> cold,
-              folly::Optional<uint32_t> exptime)
-  : warm_(std::move(warm)),
-    cold_(std::move(cold)),
-    exptime_(std::move(exptime)) {
-
+  WarmUpRoute(
+      std::shared_ptr<RouteHandleIf> warm,
+      std::shared_ptr<RouteHandleIf> cold,
+      folly::Optional<uint32_t> exptime)
+      : warm_(std::move(warm)),
+        cold_(std::move(cold)),
+        exptime_(std::move(exptime)) {
     assert(warm_ != nullptr);
     assert(cold_ != nullptr);
   }
 
   //////////////////////////////// get /////////////////////////////////////
-  McReply route(const McRequestWithMcOp<mc_op_get>& req) {
+  McGetReply route(const McGetRequest& req) {
     auto coldReply = cold_->route(req);
-    if (coldReply.isHit()) {
+    if (isHitResult(coldReply.result())) {
       return coldReply;
     }
 
     /* else */
     auto warmReply = warm_->route(req);
     uint32_t exptime;
-    if (warmReply.isHit() && getExptimeForCold(req, exptime)) {
+    if (isHitResult(warmReply.result()) && getExptimeForCold(req, exptime)) {
       folly::fibers::addTask([
-          cold = cold_,
-          addReq = coldUpdateFromWarm<McRequestWithMcOp<mc_op_add>>(
-            req, warmReply, exptime)]() {
-        cold->route(addReq);
-      });
-    }
-    return warmReply;
-  }
-
-  TypedThriftReply<cpp2::McGetReply> route(
-      const TypedThriftRequest<cpp2::McGetRequest>& req) {
-
-    auto coldReply = cold_->route(req);
-    if (coldReply.isHit()) {
-      return coldReply;
-    }
-
-    /* else */
-    auto warmReply = warm_->route(req);
-    uint32_t exptime;
-    if (warmReply.isHit() && getExptimeForCold(req, exptime)) {
-      folly::fibers::addTask([
-          cold = cold_,
-          addReq = coldUpdateFromWarm<TypedThriftRequest<cpp2::McAddRequest>>(
-            req, warmReply, exptime)]() {
-        cold->route(addReq);
-      });
+        cold = cold_,
+        addReq = coldUpdateFromWarm<McAddRequest>(req, warmReply, exptime)
+      ]() { cold->route(addReq); });
     }
     return warmReply;
   }
 
   ///////////////////////////////metaget//////////////////////////////////
-  McReply route(const McRequestWithMcOp<mc_op_metaget>& req) {
+  McMetagetReply route(const McMetagetRequest& req) {
     auto coldReply = cold_->route(req);
-    if (coldReply.isHit()) {
-      return coldReply;
-    }
-    return warm_->route(req);
-  }
-
-  TypedThriftReply<cpp2::McMetagetReply> route(
-      const TypedThriftRequest<cpp2::McMetagetRequest>& req) {
-
-    auto coldReply = cold_->route(req);
-    if (coldReply.isHit()) {
+    if (isHitResult(coldReply.result())) {
       return coldReply;
     }
     return warm_->route(req);
   }
 
   /////////////////////////////lease_get//////////////////////////////////
-  McReply route(const McRequestWithMcOp<mc_op_lease_get>& req) {
+  McLeaseGetReply route(const McLeaseGetRequest& req) {
     auto coldReply = cold_->route(req);
-    if (coldReply.isHit() || coldReply.isHotMiss()) {
+    if (isHitResult(coldReply.result()) ||
+        isHotMissResult(coldReply.result())) {
       // in case of a hot miss somebody else will set the value
       return coldReply;
     }
 
     // miss with lease token from cold route: send simple get to warm route
-    McRequestWithMcOp<mc_op_get> reqOpGet(req.clone());
+    McGetRequest reqOpGet(req.key().fullKey());
     auto warmReply = warm_->route(reqOpGet);
     uint32_t exptime;
-    if (warmReply.isHit() && getExptimeForCold(reqOpGet, exptime)) {
-      // update cold route with lease set
-      auto setReq = coldUpdateFromWarm<McRequestWithMcOp<mc_op_lease_set>>(
-          reqOpGet, warmReply, exptime);
-      setReq.setLeaseToken(coldReply.leaseToken());
-
-      folly::fibers::addTask([cold = cold_, req = std::move(setReq)]() {
-        cold->route(req);
-      });
-      return warmReply;
-    }
-    return coldReply;
-  }
-
-  TypedThriftReply<cpp2::McLeaseGetReply> route(
-      const TypedThriftRequest<cpp2::McLeaseGetRequest>& req) {
-
-    auto coldReply = cold_->route(req);
-    if (coldReply.isHit() || coldReply.isHotMiss()) {
-      // in case of a hot miss somebody else will set the value
-      return coldReply;
-    }
-
-    // miss with lease token from cold route: send simple get to warm route
-    TypedThriftRequest<cpp2::McGetRequest> reqOpGet(req.fullKey());
-    auto warmReply = warm_->route(reqOpGet);
-    uint32_t exptime;
-    if (warmReply.isHit() && getExptimeForCold(reqOpGet, exptime)) {
+    if (isHitResult(warmReply.result()) &&
+        getExptimeForCold(reqOpGet, exptime)) {
       // update cold route with lease set
       auto setReq =
-        coldUpdateFromWarm<TypedThriftRequest<cpp2::McLeaseSetRequest>>(
-            reqOpGet, warmReply, exptime);
-      const auto leaseToken =
-        coldReply->get_leaseToken() ? *coldReply->get_leaseToken() : 0;
-      setReq->set_leaseToken(leaseToken);
+          coldUpdateFromWarm<McLeaseSetRequest>(reqOpGet, warmReply, exptime);
+      setReq.leaseToken() = coldReply.leaseToken();
 
-      folly::fibers::addTask([cold = cold_, req = std::move(setReq)]() {
-        cold->route(req);
-      });
+      folly::fibers::addTask(
+          [ cold = cold_, req = std::move(setReq) ]() { cold->route(req); });
       // On hit, no need to copy appSpecificErrorCode or message
-      TypedThriftReply<cpp2::McLeaseGetReply> reply(warmReply.result());
-      reply.setFlags(warmReply.flags());
-      if (warmReply->get_value()) {
-        reply->set_value(*warmReply->get_value());
-      }
+      McLeaseGetReply reply(warmReply.result());
+      reply.flags() = warmReply.flags();
+      reply.value() = warmReply.value();
       return reply;
     }
     return coldReply;
   }
 
   ////////////////////////////////gets////////////////////////////////////
-  McReply route(const McRequestWithMcOp<mc_op_gets>& req) {
+  McGetsReply route(const McGetsRequest& req) {
     auto coldReply = cold_->route(req);
-    if (coldReply.isHit()) {
+    if (isHitResult(coldReply.result())) {
       return coldReply;
     }
 
     // miss: send simple get to warm route
-    McRequestWithMcOp<mc_op_get> reqGet(req.clone());
+    McGetRequest reqGet(req.key().fullKey());
     auto warmReply = warm_->route(reqGet);
     uint32_t exptime;
-    if (warmReply.isHit() && getExptimeForCold(req, exptime)) {
+    if (isHitResult(warmReply.result()) && getExptimeForCold(req, exptime)) {
       // update cold route if we have the value
-      auto addReq = coldUpdateFromWarm<McRequestWithMcOp<mc_op_add>>(
-          req, warmReply, exptime);
-      cold_->route(addReq);
-      // and grab cas token again
-      return cold_->route(req);
-    }
-    return coldReply;
-  }
-
-  TypedThriftReply<cpp2::McGetsReply> route(
-      const TypedThriftRequest<cpp2::McGetsRequest>& req) {
-
-    auto coldReply = cold_->route(req);
-    if (coldReply.isHit()) {
-      return coldReply;
-    }
-
-    // miss: send simple get to warm route
-    TypedThriftRequest<cpp2::McGetRequest> reqGet(req.fullKey());
-    auto warmReply = warm_->route(reqGet);
-    uint32_t exptime;
-    if (warmReply.isHit() && getExptimeForCold(req, exptime)) {
-      // update cold route if we have the value
-      auto addReq = coldUpdateFromWarm<TypedThriftRequest<cpp2::McAddRequest>>(
-          req, warmReply, exptime);
+      auto addReq = coldUpdateFromWarm<McAddRequest>(req, warmReply, exptime);
       cold_->route(addReq);
       // and grab cas token again
       return cold_->route(req);
@@ -262,17 +175,17 @@ class WarmUpRoute {
   const folly::Optional<uint32_t> exptime_;
 
   template <class ToRequest, class Request, class Reply>
-  static ToRequest coldUpdateFromWarm(const Request& origReq,
-                                      const Reply& reply,
-                                      uint32_t exptime) {
-    ToRequest req(origReq.fullKey());
-    folly::IOBuf cloned;
-    if (const auto* valuePtr = reply.valuePtrUnsafe()) {
-      valuePtr->cloneInto(cloned);
-    }
-    req.setValue(std::move(cloned));
-    req.setFlags(reply.flags());
-    req.setExptime(exptime);
+  static ToRequest coldUpdateFromWarm(
+      const Request& origReq,
+      const Reply& reply,
+      uint32_t exptime) {
+    ToRequest req(origReq.key().fullKey());
+    folly::IOBuf cloned = carbon::valuePtrUnsafe(reply)
+        ? carbon::valuePtrUnsafe(reply)->cloneAsValue()
+        : folly::IOBuf();
+    req.value() = std::move(cloned);
+    req.flags() = reply.flags();
+    req.exptime() = exptime;
     return req;
   }
 
@@ -282,12 +195,10 @@ class WarmUpRoute {
       exptime = *exptime_;
       return true;
     }
-    TypedThriftRequest<cpp2::McMetagetRequest> reqMetaget(req.fullKey());
+    McMetagetRequest reqMetaget(req.key().fullKey());
     auto warmMeta = warm_->route(reqMetaget);
-    const auto warmExptime =
-      warmMeta->get_exptime() ? *warmMeta->get_exptime() : 0;
-    if (warmMeta.isHit()) {
-      exptime = warmExptime;
+    if (isHitResult(warmMeta.result())) {
+      exptime = warmMeta.exptime();
       if (exptime != 0) {
         auto curTime = time(nullptr);
         if (curTime >= exptime) {
@@ -300,5 +211,6 @@ class WarmUpRoute {
     return false;
   }
 };
-
-}}}  // facebook::memcache::mcrouter
+}
+}
+} // facebook::memcache::mcrouter

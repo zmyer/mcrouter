@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -11,18 +11,19 @@
 
 #include <folly/Memory.h>
 
+#include "mcrouter/CarbonRouterClientBase.h"
+#include "mcrouter/ProxyBase.h"
 #include "mcrouter/config.h"
-#include "mcrouter/McrouterClient.h"
-#include "mcrouter/proxy.h"
 
-namespace facebook { namespace memcache { namespace mcrouter {
+namespace facebook {
+namespace memcache {
+namespace mcrouter {
 
-ProxyRequestContext::ProxyRequestContext(proxy_t& pr,
-                                         ProxyRequestPriority priority__)
-    : requestId_(pr.nextRequestId()), proxy_(pr), priority_(priority__) {
-  logger_.emplace(&proxy_);
-  additionalLogger_.emplace(&proxy_);
-  stat_incr_safe(proxy_.stats, proxy_request_num_outstanding_stat);
+ProxyRequestContext::ProxyRequestContext(
+    ProxyBase& pr,
+    ProxyRequestPriority priority__)
+    : proxyBase_(pr), priority_(priority__) {
+  proxyBase_.stats().incrementSafe(proxy_request_num_outstanding_stat);
 }
 
 ProxyRequestContext::~ProxyRequestContext() {
@@ -32,25 +33,20 @@ ProxyRequestContext::~ProxyRequestContext() {
   }
 
   assert(replied_);
-  if (reqComplete_) {
-    fiber_local::runWithoutLocals([this]() {
-      reqComplete_(*this);
-    });
-  }
 
   if (processing_) {
-    --proxy_.numRequestsProcessing_;
-    stat_decr(proxy_.stats, proxy_reqs_processing_stat, 1);
-    proxy_.pump();
+    --proxyBase_.numRequestsProcessing_;
+    proxyBase_.stats().decrement(proxy_reqs_processing_stat);
+    proxyBase_.pump();
   }
 
   if (requester_) {
-    if (requester_->maxOutstanding_ != 0) {
-      counting_sem_post(&requester_->outstandingReqsSem_, 1);
+    if (requester_->maxOutstanding() != 0) {
+      counting_sem_post(requester_->outstandingReqsSem(), 1);
     }
   }
 
-  stat_decr_safe(proxy_.stats, proxy_request_num_outstanding_stat);
+  proxyBase_.stats().decrementSafe(proxy_request_num_outstanding_stat);
 }
 
 uint64_t ProxyRequestContext::senderId() const {
@@ -64,56 +60,23 @@ uint64_t ProxyRequestContext::senderId() const {
   return id;
 }
 
-uint64_t ProxyRequestContext::requestId() const {
-  return requestId_;
-}
-
 void ProxyRequestContext::setSenderIdForTest(uint64_t id) {
   senderIdForTest_ = id;
 }
 
-std::shared_ptr<ProxyRequestContext> ProxyRequestContext::createRecording(
-  proxy_t& proxy,
-  ClientCallback clientCallback,
-  ShardSplitCallback shardSplitCallback) {
-
-  return std::shared_ptr<ProxyRequestContext>(
-    new ProxyRequestContext(Recording,
-                            proxy,
-                            std::move(clientCallback),
-                            std::move(shardSplitCallback))
-  );
-}
-
-std::shared_ptr<ProxyRequestContext> ProxyRequestContext::createRecordingNotify(
-  proxy_t& proxy,
-  folly::fibers::Baton& baton,
-  ClientCallback clientCallback,
-  ShardSplitCallback shardSplitCallback) {
-
-  return std::shared_ptr<ProxyRequestContext>(
-    new ProxyRequestContext(Recording,
-                            proxy,
-                            std::move(clientCallback),
-                            std::move(shardSplitCallback)),
-    [&baton] (ProxyRequestContext* ctx) {
-      delete ctx;
-      baton.post();
-    });
-}
-
 ProxyRequestContext::ProxyRequestContext(
-  RecordingT,
-  proxy_t& pr,
-  ClientCallback clientCallback,
-  ShardSplitCallback shardSplitCallback)
-    : requestId_(pr.nextRequestId()),
-      proxy_(pr),
+    RecordingT,
+    ProxyBase& pr,
+    ClientCallback clientCallback,
+    ShardSplitCallback shardSplitCallback)
+    /* pr.nextRequestId() is not threadsafe */
+    : proxyBase_(pr),
       recording_(true) {
-  new (&recordingState_) std::unique_ptr<RecordingState>(
-    folly::make_unique<RecordingState>());
+  new (&recordingState_)
+      std::unique_ptr<RecordingState>(folly::make_unique<RecordingState>());
   recordingState_->clientCallback = std::move(clientCallback);
   recordingState_->shardSplitCallback = std::move(shardSplitCallback);
 }
-
-}}} // facebook::memcache::mcrouter
+}
+}
+} // facebook::memcache::mcrouter

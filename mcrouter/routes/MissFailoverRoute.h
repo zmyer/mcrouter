@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -13,12 +13,20 @@
 #include <string>
 #include <vector>
 
-#include "mcrouter/lib/Operation.h"
-#include "mcrouter/lib/OperationTraits.h"
-#include "mcrouter/lib/RouteHandleTraverser.h"
-#include "mcrouter/McrouterFiberContext.h"
+#include <folly/dynamic.h>
 
-namespace facebook { namespace memcache { namespace mcrouter {
+#include "mcrouter/McrouterFiberContext.h"
+#include "mcrouter/lib/McResUtil.h"
+#include "mcrouter/lib/Operation.h"
+#include "mcrouter/lib/RouteHandleTraverser.h"
+#include "mcrouter/lib/carbon/RoutingGroups.h"
+#include "mcrouter/lib/config/RouteHandleBuilder.h"
+#include "mcrouter/lib/config/RouteHandleFactory.h"
+#include "mcrouter/lib/routes/NullRoute.h"
+
+namespace facebook {
+namespace memcache {
+namespace mcrouter {
 
 /**
  * For get-like requests, sends the same request sequentially
@@ -26,19 +34,25 @@ namespace facebook { namespace memcache { namespace mcrouter {
  * If all replies result in errors/misses, returns the reply from the
  * last destination in the list.
  */
-template <class RouteHandleIf>
+template <class RouterInfo>
 class MissFailoverRoute {
+ private:
+  using RouteHandleIf = typename RouterInfo::RouteHandleIf;
+
  public:
-  static std::string routeName() { return "miss-failover"; }
+  static std::string routeName() {
+    return "miss-failover";
+  }
 
   template <class Request>
-  void traverse(const Request& req,
-                const RouteHandleTraverser<RouteHandleIf>& t) const {
+  void traverse(
+      const Request& req,
+      const RouteHandleTraverser<RouteHandleIf>& t) const {
     t(targets_, req);
   }
 
   explicit MissFailoverRoute(
-    std::vector<std::shared_ptr<RouteHandleIf>> targets)
+      std::vector<std::shared_ptr<RouteHandleIf>> targets)
       : targets_(std::move(targets)) {
     assert(targets_.size() > 1);
   }
@@ -46,16 +60,16 @@ class MissFailoverRoute {
   template <class Request>
   ReplyT<Request> routeImpl(const Request& req) const {
     auto reply = targets_[0]->route(req);
-    if (reply.isHit()) {
+    if (isHitResult(reply.result())) {
       return reply;
     }
 
     // Failover
-    return fiber_local::runWithLocals([this, &req]() {
-      fiber_local::addRequestClass(RequestClass::kFailover);
+    return fiber_local<RouterInfo>::runWithLocals([this, &req]() {
+      fiber_local<RouterInfo>::addRequestClass(RequestClass::kFailover);
       for (size_t i = 1; i < targets_.size() - 1; ++i) {
         auto failoverReply = targets_[i]->route(req);
-        if (failoverReply.isHit()) {
+        if (isHitResult(failoverReply.result())) {
           return failoverReply;
         }
       }
@@ -64,20 +78,22 @@ class MissFailoverRoute {
   }
 
   template <class Request>
-  ReplyT<Request> route(const Request& req, GetLikeT<Request> = 0) const {
+  ReplyT<Request> route(const Request& req, carbon::GetLikeT<Request> = 0)
+      const {
     return routeImpl(req);
   }
 
   template <class Request>
-  ReplyT<Request> route(const Request& req, DeleteLikeT<Request> = 0) const {
+  ReplyT<Request> route(const Request& req, carbon::DeleteLikeT<Request> = 0)
+      const {
     return routeImpl(req);
   }
 
   template <class Request>
   ReplyT<Request> route(
       const Request& req,
-      OtherThanT<Request, GetLike<>, DeleteLike<>> = 0) const {
-
+      carbon::OtherThanT<Request, carbon::GetLike<>, carbon::DeleteLike<>> =
+          0) const {
     return targets_[0]->route(req);
   }
 
@@ -85,4 +101,39 @@ class MissFailoverRoute {
   const std::vector<std::shared_ptr<RouteHandleIf>> targets_;
 };
 
-}}} // facebook::memcache::mcrouter
+namespace detail {
+
+template <class RouterInfo>
+typename RouterInfo::RouteHandlePtr makeMissFailoverRoute(
+    std::vector<typename RouterInfo::RouteHandlePtr> targets) {
+  if (targets.empty()) {
+    return createNullRoute<typename RouterInfo::RouteHandleIf>();
+  }
+
+  if (targets.size() == 1) {
+    return std::move(targets[0]);
+  }
+
+  return makeRouteHandleWithInfo<RouterInfo, MissFailoverRoute>(
+      std::move(targets));
+}
+
+} // detail
+
+template <class RouterInfo>
+typename RouterInfo::RouteHandlePtr makeMissFailoverRoute(
+    RouteHandleFactory<typename RouterInfo::RouteHandleIf>& factory,
+    const folly::dynamic& json) {
+  std::vector<typename RouterInfo::RouteHandlePtr> children;
+  if (json.isObject()) {
+    if (auto jchildren = json.get_ptr("children")) {
+      children = factory.createList(*jchildren);
+    }
+  } else {
+    children = factory.createList(json);
+  }
+  return detail::makeMissFailoverRoute<RouterInfo>(std::move(children));
+}
+} // mcrouter
+} // memcache
+} // facebook

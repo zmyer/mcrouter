@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -12,17 +12,17 @@
 #include <exception>
 #include <typeindex>
 
+#include <folly/Optional.h>
 #include <folly/io/IOBuf.h>
 
+#include "mcrouter/lib/Operation.h"
+#include "mcrouter/lib/carbon/Variant.h"
 #include "mcrouter/lib/fbi/cpp/TypeList.h"
-#include "mcrouter/lib/McReply.h"
-#include "mcrouter/lib/McRequest.h"
-#include "mcrouter/lib/MessageStorage.h"
-#include "mcrouter/lib/network/gen-cpp2/mc_caret_protocol_types.h"
-#include "mcrouter/lib/network/ThriftMessageList.h"
-#include "mcrouter/lib/network/TypedThriftMessage.h"
+#include "mcrouter/lib/network/CarbonMessageList.h"
+#include "mcrouter/lib/network/gen/Memcache.h"
 
-namespace facebook { namespace memcache {
+namespace facebook {
+namespace memcache {
 
 class McAsciiParserBase {
  public:
@@ -42,7 +42,9 @@ class McAsciiParserBase {
   McAsciiParserBase(const McAsciiParserBase&) = delete;
   McAsciiParserBase& operator=(const McAsciiParserBase&) = delete;
 
-  State getCurrentState() const noexcept { return state_; }
+  State getCurrentState() const noexcept {
+    return state_;
+  }
 
   /**
    * Check if McAsciiParser already has its own buffer.
@@ -59,6 +61,7 @@ class McAsciiParserBase {
    * reply, or failed to parse some data.)
    */
   folly::StringPiece getErrorDescription() const;
+
  protected:
   void handleError(folly::IOBuf& buffer);
   /**
@@ -69,13 +72,17 @@ class McAsciiParserBase {
    * @return true iff the value was completely read.
    */
   bool readValue(folly::IOBuf& buffer, folly::IOBuf& to);
+  bool readValue(folly::IOBuf& buffer, folly::Optional<folly::IOBuf>& to);
 
-  static void appendKeyPiece(const folly::IOBuf& from,
-                             folly::IOBuf& to,
-                             const char* posStart,
-                             const char* posEnd);
-  static void trimIOBufToRange(folly::IOBuf& buffer, const char* posStart,
-                               const char* posEnd);
+  static void appendKeyPiece(
+      const folly::IOBuf& from,
+      folly::IOBuf& to,
+      const char* posStart,
+      const char* posEnd);
+  static void trimIOBufToRange(
+      folly::IOBuf& buffer,
+      const char* posStart,
+      const char* posEnd);
 
   std::string currentErrorDescription_;
 
@@ -121,6 +128,7 @@ class McClientAsciiParser : public McAsciiParserBase {
    */
   template <class T>
   T getReply();
+
  private:
   template <class Reply>
   void initializeCommon();
@@ -138,8 +146,6 @@ class McClientAsciiParser : public McAsciiParserBase {
   template <class Request>
   void consumeMessage(folly::IOBuf& buffer);
 
-  void stringValueHelper(const folly::IOBuf& buffer);
-
   template <class Reply>
   void consumeErrorMessage(const folly::IOBuf& buffer);
 
@@ -154,22 +160,26 @@ class McClientAsciiParser : public McAsciiParserBase {
   template <class Reply>
   void resetErrorMessage(Reply& message);
 
-  static void initFirstCharIOBuf(const folly::IOBuf& from,
-                                 folly::IOBuf& to,
-                                 const char* pos);
-  static void appendCurrentCharTo(const folly::IOBuf& from, folly::IOBuf& to,
-                                  const char* pos);
+  static void initFirstCharIOBuf(
+      const folly::IOBuf& from,
+      folly::IOBuf& to,
+      const char* pos);
+  static void appendCurrentCharTo(
+      const folly::IOBuf& from,
+      folly::IOBuf& to,
+      const char* pos);
 
-  MessageStorage<ConcatenateListsT<List<McReply>,
-                 MapT<ReplyT, ThriftRequestList>>> currentMessage_;
+  using ReplyVariant = carbon::makeVariantFromList<MapT<ReplyT, McRequestList>>;
+  ReplyVariant currentMessage_;
 
   using ConsumerFunPtr = void (McClientAsciiParser::*)(folly::IOBuf&);
   ConsumerFunPtr consumer_{nullptr};
 };
 
 namespace detail {
-template <class RequestList> class CallbackBase;
-}  // detail
+template <class RequestList>
+class CallbackBase;
+} // detail
 
 class McServerAsciiParser : public McAsciiParserBase {
  public:
@@ -185,6 +195,7 @@ class McServerAsciiParser : public McAsciiParserBase {
    * @return  new parser state.
    */
   State consume(folly::IOBuf& buffer);
+
  private:
   void opTypeConsumer(folly::IOBuf& buffer);
 
@@ -222,17 +233,19 @@ class McServerAsciiParser : public McAsciiParserBase {
 
   void finishReq();
 
-  std::unique_ptr<detail::CallbackBase<ThriftRequestList>> callback_;
+  std::unique_ptr<detail::CallbackBase<McRequestList>> callback_;
 
   const char* keyPieceStart_{nullptr};
   folly::IOBuf currentKey_;
   bool noreply_{false};
-  MessageStorage<ThriftRequestList> currentMessage_;
+
+  using RequestVariant = carbon::makeVariantFromList<McRequestList>;
+  RequestVariant currentMessage_;
 
   using ConsumerFunPtr = void (McServerAsciiParser::*)(folly::IOBuf&);
   ConsumerFunPtr consumer_{nullptr};
 };
-
-}}  // facebook::memcache
+}
+} // facebook::memcache
 
 #include "McAsciiParser-inl.h"

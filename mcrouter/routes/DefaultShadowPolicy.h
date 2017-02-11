@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -9,7 +9,9 @@
  */
 #pragma once
 
-namespace facebook { namespace memcache { namespace mcrouter {
+namespace facebook {
+namespace memcache {
+namespace mcrouter {
 
 /**
  * Default shadow policy: send exactly the same request to shadow
@@ -19,7 +21,7 @@ class DefaultShadowPolicy {
  public:
   template <class Request>
   static Request updateRequestForShadowing(const Request& req) {
-    return req.clone();
+    return req;
   }
 
   template <class Request>
@@ -27,5 +29,6 @@ class DefaultShadowPolicy {
     return false;
   }
 };
-
-}}}  // facebook::memcache::mcrouter
+}
+}
+} // facebook::memcache::mcrouter

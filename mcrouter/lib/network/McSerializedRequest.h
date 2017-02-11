@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -11,14 +11,13 @@
 
 #include <memory>
 
-#include "mcrouter/lib/mc/parser.h"
 #include "mcrouter/lib/mc/protocol.h"
-#include "mcrouter/lib/McMsgRef.h"
 #include "mcrouter/lib/network/AsciiSerialized.h"
 #include "mcrouter/lib/network/CaretSerializedMessage.h"
 #include "mcrouter/lib/network/UmbrellaProtocol.h"
 
-namespace facebook { namespace memcache {
+namespace facebook {
+namespace memcache {
 
 struct CodecIdRange;
 
@@ -27,11 +26,7 @@ struct CodecIdRange;
  */
 class McSerializedRequest {
  public:
-  enum class Result {
-    OK,
-    BAD_KEY,
-    ERROR
-  };
+  enum class Result { OK, BAD_KEY, ERROR };
 
   /**
    * Creates serialized representation of request for a given mc_protocol.
@@ -45,19 +40,30 @@ class McSerializedRequest {
    *                          Only used for caret.
    */
   template <class Request>
-  McSerializedRequest(const Request& req,
-                      size_t reqId,
-                      mc_protocol_t protocol,
-                      const CodecIdRange& supportedCodecs);
+  McSerializedRequest(
+      const Request& req,
+      size_t reqId,
+      mc_protocol_t protocol,
+      const CodecIdRange& supportedCodecs);
 
   ~McSerializedRequest();
 
   McSerializedRequest(const McSerializedRequest&) = delete;
   McSerializedRequest& operator=(const McSerializedRequest&) = delete;
 
-  Result serializationResult() const;
-  size_t getIovsCount() const { return iovsCount_; }
-  const struct iovec* getIovs() const { return iovsBegin_; }
+  Result serializationResult() const {
+    return result_;
+  }
+
+  size_t getIovsCount() const {
+    return iovsCount_;
+  }
+  const struct iovec* getIovs() const {
+    return iovsBegin_;
+  }
+  uint32_t typeId() const {
+    return typeId_;
+  }
 
  private:
   static const size_t kMaxIovs = 20;
@@ -72,10 +78,9 @@ class McSerializedRequest {
   size_t iovsCount_{0};
   mc_protocol_t protocol_{mc_unknown_protocol};
   Result result_{Result::OK};
-
-  bool checkKeyLength(const folly::IOBuf& key);
+  uint32_t typeId_{0};
 };
-
-}} // facebook::memcache
+}
+} // facebook::memcache
 
 #include "McSerializedRequest-inl.h"

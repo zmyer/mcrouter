@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -13,14 +13,16 @@
 #include <string>
 #include <vector>
 
-#include <folly/experimental/fibers/AddTasks.h>
+#include <folly/fibers/AddTasks.h>
 
-#include "mcrouter/lib/mc/msg.h"
+#include "mcrouter/lib/McResUtil.h"
 #include "mcrouter/lib/Operation.h"
 #include "mcrouter/lib/Reply.h"
 #include "mcrouter/lib/RouteHandleTraverser.h"
+#include "mcrouter/lib/mc/msg.h"
 
-namespace facebook { namespace memcache {
+namespace facebook {
+namespace memcache {
 
 /**
  * Sends the same request to all child route handles.
@@ -32,11 +34,14 @@ namespace facebook { namespace memcache {
 template <class RouteHandleIf>
 class AllMajorityRoute {
  public:
-  static std::string routeName() { return "all-majority"; }
+  static std::string routeName() {
+    return "all-majority";
+  }
 
   template <class Request>
-  void traverse(const Request& req,
-                const RouteHandleTraverser<RouteHandleIf>& t) const {
+  void traverse(
+      const Request& req,
+      const RouteHandleTraverser<RouteHandleIf>& t) const {
     t(children_, req);
   }
 
@@ -51,30 +56,25 @@ class AllMajorityRoute {
 
     std::vector<std::function<Reply()>> funcs;
     funcs.reserve(children_.size());
-    auto reqCopy = std::make_shared<Request>(req.clone());
+    auto reqCopy = std::make_shared<Request>(req);
     for (auto& rh : children_) {
-      funcs.push_back(
-        [reqCopy, rh]() {
-          return rh->route(*reqCopy);
-        }
-      );
+      funcs.push_back([reqCopy, rh]() { return rh->route(*reqCopy); });
     }
 
     size_t counts[mc_nres];
     std::fill(counts, counts + mc_nres, 0);
     size_t majorityCount = 0;
-    Reply majorityReply = Reply(DefaultReply, req);
+    Reply majorityReply = createReply(DefaultReply, req);
 
     auto taskIt = folly::fibers::addTasks(funcs.begin(), funcs.end());
     taskIt.reserve(children_.size() / 2 + 1);
-    while (taskIt.hasNext() &&
-           majorityCount < children_.size() / 2 + 1) {
-
+    while (taskIt.hasNext() && majorityCount < children_.size() / 2 + 1) {
       auto reply = taskIt.awaitNext();
       auto result = reply.result();
 
       ++counts[result];
-      if ((counts[result] == majorityCount && reply.worseThan(majorityReply)) ||
+      if ((counts[result] == majorityCount &&
+           worseThan(reply.result(), majorityReply.result())) ||
           (counts[result] > majorityCount)) {
         majorityReply = std::move(reply);
         majorityCount = counts[result];
@@ -87,5 +87,5 @@ class AllMajorityRoute {
  private:
   const std::vector<std::shared_ptr<RouteHandleIf>> children_;
 };
-
-}} // facebook::memcache
+}
+} // facebook::memcache

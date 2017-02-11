@@ -11,10 +11,7 @@
 
 #include "mcrouter/lib/mc/msg.h"
 #include "mcrouter/lib/McOperation.h"
-#include "mcrouter/lib/McReply.h"
-#include "mcrouter/lib/McRequest.h"
-#include "mcrouter/lib/network/gen-cpp2/mc_caret_protocol_types.h"
-#include "mcrouter/lib/network/TypedThriftMessage.h"
+#include "mcrouter/lib/network/gen/Memcache.h"
 
 namespace facebook { namespace memcache {
 
@@ -41,21 +38,16 @@ variable cs savedCs_;
 
 # Action that initializes/performs data parsing for replies.
 action reply_value_data {
-  // We have value field, so emplace IOBuf for value.
-  // TODO(jmswen) We can remove this empty setValue hack once we've totally
-  // moved to Caret
-  message.setValue(folly::IOBuf());
-  if (!readValue(buffer, *message.valuePtrUnsafe())) {
+  // We must ensure message.value() is nonempty for ASCII get-like replies
+  message.value().emplace();
+  if (!readValue(buffer, *message.value())) {
     fbreak;
   }
 }
 
 # Action that initializes/performs data parsing for requests.
 action req_value_data {
-  // Note: order is important here. Must set __isset.value = true before
-  // possibly breaking.
-  message->__isset.value = true;
-  if (!readValue(buffer, message->value)) {
+  if (!readValue(buffer, message.value())) {
     fbreak;
   }
 }
@@ -103,7 +95,7 @@ action key_end {
 
 # Key that we want to store.
 key = (any+ -- (cntrl | space)) >key_start %key_end %{
-  message.setKey(std::move(currentKey_));
+  message.key() = std::move(currentKey_);
 };
 
 multi_token = (print+ -- ( '\r' | '\n' )) >key_start %key_end %{
@@ -114,7 +106,7 @@ multi_token = (print+ -- ( '\r' | '\n' )) >key_start %key_end %{
   while (currentKey_.length() > 0 && isspace(*(currentKey_.tail() - 1))) {
     currentKey_.trimEnd(1);
   }
-  message.setKey(std::move(currentKey_));
+  message.key() = std::move(currentKey_);
 };
 
 # Unsigned integer value.
@@ -128,25 +120,21 @@ negative = '-' >{
 
 # Single fields with in-place parsing.
 flags = uint %{
-  message.setFlags(currentUInt_);
+  message.flags() = currentUInt_;
 };
 
 delay = uint %{
-  message->set_delay(currentUInt_);
+  message.delay() = currentUInt_;
 };
 
 exptime = uint %{
-  message->set_exptime(static_cast<int32_t>(currentUInt_));
+  message.exptime() = static_cast<int32_t>(currentUInt_);
 };
 
 exptime_req = negative? uint %{
   auto value = static_cast<int32_t>(currentUInt_);
-  message.setExptime(negative_ ? -value : value);
+  message.exptime() = negative_ ? -value : value;
   negative_ = false;
-};
-
-number = uint %{
-  message.setNumber(static_cast<uint32_t>(currentUInt_));
 };
 
 value_bytes = uint %{
@@ -154,28 +142,28 @@ value_bytes = uint %{
 };
 
 cas_id = uint %{
-  message->set_casToken(currentUInt_);
+  message.casToken() = currentUInt_;
 };
 
 delta = uint %{
-  message->set_delta(currentUInt_);
+  message.delta() = currentUInt_;
 };
 
 lease_token = uint %{
   // NOTE: we don't support -1 lease token.
-  message->set_leaseToken(currentUInt_);
+  message.leaseToken() = currentUInt_;
 };
 
 error_code = uint %{
-  message.setAppSpecificErrorCode(static_cast<uint16_t>(currentUInt_));
+  message.appSpecificErrorCode() = static_cast<uint16_t>(currentUInt_);
 };
 
 # Common storage replies.
-not_found = 'NOT_FOUND' @{ message.setResult(mc_res_notfound); };
-deleted = 'DELETED' @{ message.setResult(mc_res_deleted); };
-touched = 'TOUCHED' @{ message.setResult(mc_res_touched); };
+not_found = 'NOT_FOUND' @{ message.result() = mc_res_notfound; };
+deleted = 'DELETED' @{ message.result() = mc_res_deleted; };
+touched = 'TOUCHED' @{ message.result() = mc_res_touched; };
 
-VALUE = 'VALUE' % { message.setResult(mc_res_found); };
+VALUE = 'VALUE' % { message.result() = mc_res_found; };
 
 hit = VALUE ' '+ skip_key ' '+ flags ' '+ value_bytes new_line @reply_value_data
       new_line;
@@ -199,14 +187,14 @@ server_error = 'SERVER_ERROR' (' ' error_code ' ')? ' '? error_message
                %{
                  uint32_t errorCode = currentUInt_;
                  if (errorCode == SERVER_ERROR_BUSY) {
-                   message.setResult(mc_res_busy);
+                   message.result() = mc_res_busy;
                  } else {
-                   message.setResult(mc_res_remote_error);
+                   message.result() = mc_res_remote_error;
                  }
                };
 
 client_error = 'CLIENT_ERROR' (' ' error_code ' ')? ' '? error_message
-               %{ message.setResult(mc_res_client_error); };
+               %{ message.result() = mc_res_client_error; };
 
 error = command_error | server_error | client_error;
 }%%
@@ -216,28 +204,14 @@ error = command_error | server_error | client_error;
 machine mc_ascii_get_reply;
 include mc_ascii_common;
 
-get = hit? >{ message.setResult(mc_res_notfound); } 'END';
+get = hit? >{ message.result() = mc_res_notfound; } 'END';
 get_reply := (get | error) msg_end;
 write data;
 }%%
 
 template <>
-void McClientAsciiParser::consumeMessage<McRequestWithMcOp<mc_op_get>>(
-    folly::IOBuf& buffer) {
-  McReply& message = currentMessage_.get<McReply>();
-  %%{
-    machine mc_ascii_get_reply;
-    write init nocs;
-    write exec;
-  }%%
-}
-
-template <>
-void McClientAsciiParser::consumeMessage<
-    TypedThriftRequest<cpp2::McGetRequest>>(folly::IOBuf& buffer) {
-  using Request = TypedThriftRequest<cpp2::McGetRequest>;
-
-  auto& message = currentMessage_.get<ReplyT<Request>>();
+void McClientAsciiParser::consumeMessage<McGetRequest>(folly::IOBuf& buffer) {
+  auto& message = currentMessage_.get<McGetReply>();
   %%{
     machine mc_ascii_get_reply;
     write init nocs;
@@ -250,28 +224,14 @@ void McClientAsciiParser::consumeMessage<
 machine mc_ascii_gets_reply;
 include mc_ascii_common;
 
-gets = gets_hit? >{ message.setResult(mc_res_notfound); } 'END';
+gets = gets_hit? >{ message.result() = mc_res_notfound; } 'END';
 gets_reply := (gets | error) msg_end;
 write data;
 }%%
 
 template <>
-void McClientAsciiParser::consumeMessage<McRequestWithMcOp<mc_op_gets>>(
-    folly::IOBuf& buffer) {
-  McReply& message = currentMessage_.get<McReply>();
-  %%{
-    machine mc_ascii_gets_reply;
-    write init nocs;
-    write exec;
-  }%%
-}
-
-template <>
-void McClientAsciiParser::consumeMessage<
-    TypedThriftRequest<cpp2::McGetsRequest>>(folly::IOBuf& buffer) {
-  using Request = TypedThriftRequest<cpp2::McGetsRequest>;
-
-  auto& message = currentMessage_.get<ReplyT<Request>>();
+void McClientAsciiParser::consumeMessage<McGetsRequest>(folly::IOBuf& buffer) {
+  auto& message = currentMessage_.get<McGetsReply>();
   %%{
     machine mc_ascii_gets_reply;
     write init nocs;
@@ -287,7 +247,7 @@ include mc_ascii_common;
 # FIXME, we should return mc_res_foundstale or mc_res_notfoundhot.
 lvalue = 'LVALUE' ' '+ skip_key ' '+ lease_token ' '+ flags ' '+ value_bytes
          new_line @reply_value_data new_line
-         @{ message.setResult(mc_res_notfound); };
+         @{ message.result() = mc_res_notfound; };
 
 lease_get = (hit | lvalue) 'END';
 lease_get_reply := (lease_get | error) msg_end;
@@ -296,22 +256,9 @@ write data;
 }%%
 
 template <>
-void McClientAsciiParser::consumeMessage<McRequestWithMcOp<mc_op_lease_get>>(
-    folly::IOBuf& buffer) {
-  McReply& message = currentMessage_.get<McReply>();
-  %%{
-    machine mc_ascii_lease_get_reply;
-    write init nocs;
-    write exec;
-  }%%
-}
-
-template <>
 void McClientAsciiParser::consumeMessage<
-    TypedThriftRequest<cpp2::McLeaseGetRequest>>(folly::IOBuf& buffer) {
-  using Request = TypedThriftRequest<cpp2::McLeaseGetRequest>;
-
-  auto& message = currentMessage_.get<ReplyT<Request>>();
+    McLeaseGetRequest>(folly::IOBuf& buffer) {
+  auto& message = currentMessage_.get<McLeaseGetReply>();
   %%{
     machine mc_ascii_lease_get_reply;
     write init nocs;
@@ -324,10 +271,10 @@ void McClientAsciiParser::consumeMessage<
 machine mc_ascii_storage_reply;
 include mc_ascii_common;
 
-stored = 'STORED' @{ message.setResult(mc_res_stored); };
-stale_stored = 'STALE_STORED' @{ message.setResult(mc_res_stalestored); };
-not_stored = 'NOT_STORED' @{ message.setResult(mc_res_notstored); };
-exists = 'EXISTS' @{ message.setResult(mc_res_exists); };
+stored = 'STORED' @{ message.result() = mc_res_stored; };
+stale_stored = 'STALE_STORED' @{ message.result() = mc_res_stalestored; };
+not_stored = 'NOT_STORED' @{ message.result() = mc_res_notstored; };
+exists = 'EXISTS' @{ message.result() = mc_res_exists; };
 
 storage = stored | stale_stored | not_stored | exists | not_found | deleted;
 storage_reply := (storage | error) msg_end;
@@ -350,7 +297,7 @@ void McClientAsciiParser::consumeStorageReplyCommon(folly::IOBuf& buffer) {
 machine mc_ascii_arithm_reply;
 include mc_ascii_common;
 
-arithm = not_found | (delta @{ message.setResult(mc_res_stored); }) ' '*;
+arithm = not_found | (delta @{ message.result() = mc_res_stored; }) ' '*;
 arithm_reply := (arithm | error) msg_end;
 
 write data;
@@ -371,7 +318,7 @@ void McClientAsciiParser::consumeArithmReplyCommon(folly::IOBuf& buffer) {
 machine mc_ascii_version_reply;
 include mc_ascii_common;
 
-version = 'VERSION ' @{ message.setResult(mc_res_ok); }
+version = 'VERSION ' @{ message.result() = mc_res_ok; }
           (any* -- ('\r' | '\n')) ${
   using MsgT = std::decay<decltype(message)>::type;
   consumeVersion<MsgT>(buffer);
@@ -382,22 +329,9 @@ write data;
 }%%
 
 template <>
-void McClientAsciiParser::consumeMessage<McRequestWithMcOp<mc_op_version>>(
+void McClientAsciiParser::consumeMessage<McVersionRequest>(
     folly::IOBuf& buffer) {
-  McReply& message = currentMessage_.get<McReply>();
-  %%{
-    machine mc_ascii_version_reply;
-    write init nocs;
-    write exec;
-  }%%
-}
-
-template <>
-void McClientAsciiParser::consumeMessage<
-    TypedThriftRequest<cpp2::McVersionRequest>>(folly::IOBuf& buffer) {
-  using Request = TypedThriftRequest<cpp2::McVersionRequest>;
-
-  auto& message = currentMessage_.get<ReplyT<Request>>();
+  auto& message = currentMessage_.get<McVersionReply>();
   %%{
     machine mc_ascii_version_reply;
     write init nocs;
@@ -417,22 +351,9 @@ write data;
 }%%
 
 template <>
-void McClientAsciiParser::consumeMessage<McRequestWithMcOp<mc_op_delete>>(
+void McClientAsciiParser::consumeMessage<McDeleteRequest>(
     folly::IOBuf& buffer) {
-  McReply& message = currentMessage_.get<McReply>();
-  %%{
-    machine mc_ascii_delete_reply;
-    write init nocs;
-    write exec;
-  }%%
-}
-
-template <>
-void McClientAsciiParser::consumeMessage<
-    TypedThriftRequest<cpp2::McDeleteRequest>>(folly::IOBuf& buffer) {
-  using Request = TypedThriftRequest<cpp2::McDeleteRequest>;
-
-  auto& message = currentMessage_.get<ReplyT<Request>>();
+  auto& message = currentMessage_.get<McDeleteReply>();
   %%{
     machine mc_ascii_delete_reply;
     write init nocs;
@@ -452,22 +373,9 @@ write data;
 }%%
 
 template <>
-void McClientAsciiParser::consumeMessage<McRequestWithMcOp<mc_op_touch>>(
+void McClientAsciiParser::consumeMessage<McTouchRequest>(
     folly::IOBuf& buffer) {
-  McReply& message = currentMessage_.get<McReply>();
-  %%{
-    machine mc_ascii_touch_reply;
-    write init nocs;
-    write exec;
-  }%%
-}
-
-template <>
-void McClientAsciiParser::consumeMessage<
-    TypedThriftRequest<cpp2::McTouchRequest>>(folly::IOBuf& buffer) {
-  using Request = TypedThriftRequest<cpp2::McTouchRequest>;
-
-  auto& message = currentMessage_.get<ReplyT<Request>>();
+  auto& message = currentMessage_.get<McTouchReply>();
   %%{
     machine mc_ascii_touch_reply;
     write init nocs;
@@ -482,11 +390,11 @@ include mc_ascii_common;
 
 age = negative? uint %{
   auto value = static_cast<int32_t>(currentUInt_);
-  message->set_age(negative_ ? -value : value);
+  message.age() = negative_ ? -value : value;
   negative_ = false;
 };
 age_unknown = 'unknown' %{
-  message->set_age(-1);
+  message.age() = -1;
 };
 
 ip_addr = (xdigit | '.' | ':')+ ${
@@ -498,38 +406,23 @@ ip_addr = (xdigit | '.' | ':')+ ${
 };
 
 transient = uint %{
-  // McReply 'flags' field is used for is_transient result in metaget hit
-  // reply. setFlags is a no-op for typed McMetagetReply; we will not support
-  // is_transient in Caret.
-  message.setFlags(currentUInt_);
+  // We no longer support is_transient with typed requests.
 };
 
-meta = 'META' % { message.setResult(mc_res_found); };
+meta = 'META' % { message.result() = mc_res_found; };
 mhit = meta ' '+ skip_key ' '+ 'age:' ' '* (age | age_unknown) ';' ' '*
   'exptime:' ' '* exptime ';' ' '* 'from:' ' '* (ip_addr|'unknown') ';' ' '*
   'is_transient:' ' '* transient ' '* new_line;
-metaget = mhit? >{ message.setResult(mc_res_notfound); } 'END' msg_end;
+metaget = mhit? >{ message.result() = mc_res_notfound; } 'END' msg_end;
 metaget_reply := (metaget | error) msg_end;
 
 write data;
 }%%
+
 template <>
-void McClientAsciiParser::consumeMessage<McRequestWithMcOp<mc_op_metaget>>(
+void McClientAsciiParser::consumeMessage<McMetagetRequest>(
     folly::IOBuf& buffer) {
-  McReply& message = currentMessage_.get<McReply>();
-  %%{
-    machine mc_ascii_metaget_reply;
-    write init nocs;
-    write exec;
-  }%%
-}
-
-template <>
-void McClientAsciiParser::consumeMessage<
-    TypedThriftRequest<cpp2::McMetagetRequest>>(folly::IOBuf& buffer) {
-  using Request = TypedThriftRequest<cpp2::McMetagetRequest>;
-
-  auto& message = currentMessage_.get<ReplyT<Request>>();
+  auto& message = currentMessage_.get<McMetagetReply>();
   %%{
     machine mc_ascii_metaget_reply;
     write init nocs;
@@ -542,16 +435,16 @@ void McClientAsciiParser::consumeMessage<
 machine mc_ascii_flushall_reply;
 include mc_ascii_common;
 
-flushall = 'OK' $ { message.setResult(mc_res_ok); };
+flushall = 'OK' $ { message.result() = mc_res_ok; };
 flushall_reply := (flushall | error) msg_end;
 
 write data;
 }%%
 
 template <>
-void McClientAsciiParser::consumeMessage<McRequestWithMcOp<mc_op_flushall>>(
+void McClientAsciiParser::consumeMessage<McFlushAllRequest>(
     folly::IOBuf& buffer) {
-  McReply& message = currentMessage_.get<McReply>();
+  auto& message = currentMessage_.get<McFlushAllReply>();
   %%{
     machine mc_ascii_flushall_reply;
     write init nocs;
@@ -560,374 +453,112 @@ void McClientAsciiParser::consumeMessage<McRequestWithMcOp<mc_op_flushall>>(
 }
 
 template <>
-void McClientAsciiParser::consumeMessage<
-    TypedThriftRequest<cpp2::McFlushAllRequest>>(folly::IOBuf& buffer) {
-  using Request = TypedThriftRequest<cpp2::McFlushAllRequest>;
-
-  auto& message = currentMessage_.get<ReplyT<Request>>();
-  %%{
-    machine mc_ascii_flushall_reply;
-    write init nocs;
-    write exec;
-  }%%
-}
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_get>>() {
-
-  using Request = McRequestWithMcOp<mc_op_get>;
-
-  initializeCommon<ReplyT<Request>>();
+void McClientAsciiParser::initializeReplyParser<McGetRequest>() {
+  initializeCommon<McGetReply>();
   savedCs_ = mc_ascii_get_reply_en_get_reply;
   errorCs_ = mc_ascii_get_reply_error;
-  consumer_ = &McClientAsciiParser::consumeMessage<Request>;
+  consumer_ = &McClientAsciiParser::consumeMessage<McGetRequest>;
 }
 
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McGetRequest>>() {
-
-  using Request = TypedThriftRequest<cpp2::McGetRequest>;
-
-  initializeCommon<ReplyT<Request>>();
-  savedCs_ = mc_ascii_get_reply_en_get_reply;
-  errorCs_ = mc_ascii_get_reply_error;
-  consumer_ = &McClientAsciiParser::consumeMessage<Request>;
-}
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_gets>>() {
-
-  using Request = McRequestWithMcOp<mc_op_gets>;
-
-  initializeCommon<ReplyT<Request>>();
+void McClientAsciiParser::initializeReplyParser<McGetsRequest>() {
+  initializeCommon<McGetsReply>();
   savedCs_ = mc_ascii_gets_reply_en_gets_reply;
   errorCs_ = mc_ascii_gets_reply_error;
-  consumer_ = &McClientAsciiParser::consumeMessage<Request>;
+  consumer_ = &McClientAsciiParser::consumeMessage<McGetsRequest>;
 }
 
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McGetsRequest>>() {
-
-  using Request = TypedThriftRequest<cpp2::McGetsRequest>;
-
-  initializeCommon<ReplyT<Request>>();
-  savedCs_ = mc_ascii_gets_reply_en_gets_reply;
-  errorCs_ = mc_ascii_gets_reply_error;
-  consumer_ = &McClientAsciiParser::consumeMessage<Request>;
-}
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_lease_get>>() {
-
-  using Request = McRequestWithMcOp<mc_op_lease_get>;
-
-  initializeCommon<ReplyT<Request>>();
+void McClientAsciiParser::initializeReplyParser<McLeaseGetRequest>() {
+  initializeCommon<McLeaseGetReply>();
   savedCs_ = mc_ascii_lease_get_reply_en_lease_get_reply;
   errorCs_ = mc_ascii_lease_get_reply_error;
-  consumer_ = &McClientAsciiParser::consumeMessage<Request>;
+  consumer_ = &McClientAsciiParser::consumeMessage<McLeaseGetRequest>;
 }
 
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McLeaseGetRequest>>() {
-
-  using Request = TypedThriftRequest<cpp2::McLeaseGetRequest>;
-
-  initializeCommon<ReplyT<Request>>();
-  savedCs_ = mc_ascii_lease_get_reply_en_lease_get_reply;
-  errorCs_ = mc_ascii_lease_get_reply_error;
-  consumer_ = &McClientAsciiParser::consumeMessage<Request>;
+void McClientAsciiParser::initializeReplyParser<McSetRequest>() {
+  initializeStorageReplyCommon<McSetReply>();
 }
 
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_set>>() {
-
-  using Request = McRequestWithMcOp<mc_op_set>;
-
-  initializeStorageReplyCommon<ReplyT<Request>>();
+void McClientAsciiParser::initializeReplyParser<McAddRequest>() {
+  initializeStorageReplyCommon<McAddReply>();
 }
 
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McSetRequest>>() {
-
-  using Request = TypedThriftRequest<cpp2::McSetRequest>;
-
-  initializeStorageReplyCommon<ReplyT<Request>>();
+void McClientAsciiParser::initializeReplyParser<McReplaceRequest>() {
+  initializeStorageReplyCommon<McReplaceReply>();
 }
 
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_add>>() {
-
-  using Request = McRequestWithMcOp<mc_op_add>;
-
-  initializeStorageReplyCommon<ReplyT<Request>>();
+void McClientAsciiParser::initializeReplyParser<McLeaseSetRequest>() {
+  initializeStorageReplyCommon<McLeaseSetReply>();
 }
 
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McAddRequest>>() {
-
-  using Request = TypedThriftRequest<cpp2::McAddRequest>;
-
-  initializeStorageReplyCommon<ReplyT<Request>>();
+void McClientAsciiParser::initializeReplyParser<McCasRequest>() {
+  initializeStorageReplyCommon<McCasReply>();
 }
 
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_replace>>() {
-
-  using Request = McRequestWithMcOp<mc_op_replace>;
-
-  initializeStorageReplyCommon<ReplyT<Request>>();
+void McClientAsciiParser::initializeReplyParser<McAppendRequest>() {
+  initializeStorageReplyCommon<McAppendReply>();
 }
 
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McReplaceRequest>>() {
-
-  using Request = TypedThriftRequest<cpp2::McReplaceRequest>;
-
-  initializeStorageReplyCommon<ReplyT<Request>>();
+void McClientAsciiParser::initializeReplyParser<McPrependRequest>() {
+  initializeStorageReplyCommon<McPrependReply>();
 }
 
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_lease_set>>() {
-
-  using Request = McRequestWithMcOp<mc_op_lease_set>;
-
-  initializeStorageReplyCommon<ReplyT<Request>>();
+void McClientAsciiParser::initializeReplyParser<McIncrRequest>() {
+  initializeArithmReplyCommon<McIncrReply>();
 }
 
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McLeaseSetRequest>>() {
-
-  using Request = TypedThriftRequest<cpp2::McLeaseSetRequest>;
-
-  initializeStorageReplyCommon<ReplyT<Request>>();
+void McClientAsciiParser::initializeReplyParser<McDecrRequest>() {
+  initializeArithmReplyCommon<McDecrReply>();
 }
 
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_cas>>() {
-
-  using Request = McRequestWithMcOp<mc_op_cas>;
-
-  initializeStorageReplyCommon<ReplyT<Request>>();
-}
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McCasRequest>>() {
-
-  using Request = TypedThriftRequest<cpp2::McCasRequest>;
-
-  initializeStorageReplyCommon<ReplyT<Request>>();
-}
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_append>>() {
-
-  using Request = McRequestWithMcOp<mc_op_append>;
-
-  initializeStorageReplyCommon<ReplyT<Request>>();
-}
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McAppendRequest>>() {
-
-  using Request = TypedThriftRequest<cpp2::McAppendRequest>;
-
-  initializeStorageReplyCommon<ReplyT<Request>>();
-}
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_prepend>>() {
-
-  using Request = McRequestWithMcOp<mc_op_prepend>;
-
-  initializeStorageReplyCommon<ReplyT<Request>>();
-}
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McPrependRequest>>() {
-
-  using Request = TypedThriftRequest<cpp2::McPrependRequest>;
-
-  initializeStorageReplyCommon<ReplyT<Request>>();
-}
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_incr>>() {
-
-  using Request = McRequestWithMcOp<mc_op_incr>;
-
-  initializeArithmReplyCommon<ReplyT<Request>>();
-}
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McIncrRequest>>() {
-
-  using Request = TypedThriftRequest<cpp2::McIncrRequest>;
-
-  initializeArithmReplyCommon<ReplyT<Request>>();
-}
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_decr>>() {
-
-  using Request = McRequestWithMcOp<mc_op_decr>;
-
-  initializeArithmReplyCommon<ReplyT<Request>>();
-}
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McDecrRequest>>() {
-
-  using Request = TypedThriftRequest<cpp2::McDecrRequest>;
-
-  initializeArithmReplyCommon<ReplyT<Request>>();
-}
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_version>>() {
-
-  using Request = McRequestWithMcOp<mc_op_version>;
-
-  initializeCommon<ReplyT<Request>>();
+void McClientAsciiParser::initializeReplyParser<McVersionRequest>() {
+  initializeCommon<McVersionReply>();
   savedCs_ = mc_ascii_version_reply_en_version_reply;
   errorCs_ = mc_ascii_version_reply_error;
-  consumer_ = &McClientAsciiParser::consumeMessage<Request>;
+  consumer_ = &McClientAsciiParser::consumeMessage<McVersionRequest>;
 }
 
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McVersionRequest>>() {
-
-  using Request = TypedThriftRequest<cpp2::McVersionRequest>;
-
-  initializeCommon<ReplyT<Request>>();
-  savedCs_ = mc_ascii_version_reply_en_version_reply;
-  errorCs_ = mc_ascii_version_reply_error;
-  consumer_ = &McClientAsciiParser::consumeMessage<Request>;
-}
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_delete>>() {
-
-  using Request = McRequestWithMcOp<mc_op_delete>;
-
-  initializeCommon<ReplyT<Request>>();
+void McClientAsciiParser::initializeReplyParser<McDeleteRequest>() {
+  initializeCommon<McDeleteReply>();
   savedCs_ = mc_ascii_delete_reply_en_delete_reply;
   errorCs_ = mc_ascii_delete_reply_error;
-  consumer_ = &McClientAsciiParser::consumeMessage<Request>;
+  consumer_ = &McClientAsciiParser::consumeMessage<McDeleteRequest>;
 }
 
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McDeleteRequest>>() {
-
-  using Request = TypedThriftRequest<cpp2::McDeleteRequest>;
-
-  initializeCommon<ReplyT<Request>>();
-  savedCs_ = mc_ascii_delete_reply_en_delete_reply;
-  errorCs_ = mc_ascii_delete_reply_error;
-  consumer_ = &McClientAsciiParser::consumeMessage<Request>;
-}
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_touch>>() {
-
-  using Request = McRequestWithMcOp<mc_op_touch>;
-
-  initializeCommon<ReplyT<Request>>();
+void McClientAsciiParser::initializeReplyParser<McTouchRequest>() {
+  initializeCommon<McTouchReply>();
   savedCs_ = mc_ascii_touch_reply_en_touch_reply;
   errorCs_ = mc_ascii_touch_reply_error;
-  consumer_ = &McClientAsciiParser::consumeMessage<Request>;
+  consumer_ = &McClientAsciiParser::consumeMessage<McTouchRequest>;
 }
 
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McTouchRequest>>() {
-
-  using Request = TypedThriftRequest<cpp2::McTouchRequest>;
-
-  initializeCommon<ReplyT<Request>>();
-  savedCs_ = mc_ascii_touch_reply_en_touch_reply;
-  errorCs_ = mc_ascii_touch_reply_error;
-  consumer_ = &McClientAsciiParser::consumeMessage<Request>;
-}
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_metaget>>() {
-
-  using Request = McRequestWithMcOp<mc_op_metaget>;
-
-  initializeCommon<ReplyT<Request>>();
-  // Since mc_op_metaget has A LOT of specific fields, just create McMsgRef for
-  // now.
-  auto& reply = currentMessage_.get<ReplyT<Request>>();
-  reply.msg_ = createMcMsgRef();
+void McClientAsciiParser::initializeReplyParser<McMetagetRequest>() {
+  initializeCommon<McMetagetReply>();
   savedCs_ = mc_ascii_metaget_reply_en_metaget_reply;
   errorCs_ = mc_ascii_metaget_reply_error;
-  consumer_ = &McClientAsciiParser::consumeMessage<Request>;
+  consumer_ = &McClientAsciiParser::consumeMessage<McMetagetRequest>;
 }
 
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McMetagetRequest>>() {
-
-  using Request = TypedThriftRequest<cpp2::McMetagetRequest>;
-
-  initializeCommon<ReplyT<Request>>();
-  savedCs_ = mc_ascii_metaget_reply_en_metaget_reply;
-  errorCs_ = mc_ascii_metaget_reply_error;
-  consumer_ = &McClientAsciiParser::consumeMessage<Request>;
-}
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_flushall>>() {
-
-  using Request = McRequestWithMcOp<mc_op_flushall>;
-
-  initializeCommon<ReplyT<Request>>();
+void McClientAsciiParser::initializeReplyParser<McFlushAllRequest>() {
+  initializeCommon<McFlushAllReply>();
   savedCs_ = mc_ascii_flushall_reply_en_flushall_reply;
   errorCs_ = mc_ascii_flushall_reply_error;
-  consumer_ = &McClientAsciiParser::consumeMessage<Request>;
-}
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McFlushAllRequest>>() {
-
-  using Request = TypedThriftRequest<cpp2::McFlushAllRequest>;
-
-  initializeCommon<ReplyT<Request>>();
-  savedCs_ = mc_ascii_flushall_reply_en_flushall_reply;
-  errorCs_ = mc_ascii_flushall_reply_error;
-  consumer_ = &McClientAsciiParser::consumeMessage<Request>;
+  consumer_ = &McClientAsciiParser::consumeMessage<McFlushAllRequest>;
 }
 
 
@@ -1047,7 +678,7 @@ write data;
 }%%
 
 void McServerAsciiParser::consumeCas(folly::IOBuf& buffer) {
-  auto& message = currentMessage_.get<TypedThriftRequest<cpp2::McCasRequest>>();
+  auto& message = currentMessage_.get<McCasRequest>();
   %%{
     machine mc_ascii_cas_req_body;
     write init nocs;
@@ -1074,7 +705,7 @@ write data;
 
 void McServerAsciiParser::consumeLeaseSet(folly::IOBuf& buffer) {
   auto& message =
-    currentMessage_.get<TypedThriftRequest<cpp2::McLeaseSetRequest>>();
+    currentMessage_.get<McLeaseSetRequest>();
   %%{
     machine mc_ascii_lease_set_req_body;
     write init nocs;
@@ -1099,7 +730,7 @@ write data;
 
 void McServerAsciiParser::consumeDelete(folly::IOBuf& buffer) {
   auto& message =
-    currentMessage_.get<TypedThriftRequest<cpp2::McDeleteRequest>>();
+    currentMessage_.get<McDeleteRequest>();
   %%{
     machine mc_ascii_delete_req_body;
     write init nocs;
@@ -1124,7 +755,7 @@ write data;
 
 void McServerAsciiParser::consumeTouch(folly::IOBuf& buffer) {
   auto& message =
-    currentMessage_.get<TypedThriftRequest<cpp2::McTouchRequest>>();
+    currentMessage_.get<McTouchRequest>();
   %%{
     machine mc_ascii_touch_req_body;
     write init nocs;
@@ -1150,7 +781,7 @@ write data;
 
 void McServerAsciiParser::consumeShutdown(folly::IOBuf& buffer) {
   auto& message =
-    currentMessage_.get<TypedThriftRequest<cpp2::McShutdownRequest>>();
+    currentMessage_.get<McShutdownRequest>();
   %%{
     machine mc_ascii_shutdown_req_body;
     write init nocs;
@@ -1209,7 +840,7 @@ write data;
 
 void McServerAsciiParser::consumeStats(folly::IOBuf& buffer) {
   auto& message =
-    currentMessage_.get<TypedThriftRequest<cpp2::McStatsRequest>>();
+    currentMessage_.get<McStatsRequest>();
   %%{
     machine mc_ascii_stats_req_body;
     write init nocs;
@@ -1234,7 +865,7 @@ write data;
 
 void McServerAsciiParser::consumeExec(folly::IOBuf& buffer) {
   auto& message =
-    currentMessage_.get<TypedThriftRequest<cpp2::McExecRequest>>();
+    currentMessage_.get<McExecRequest>();
   %%{
     machine mc_ascii_exec_req_body;
     write init nocs;
@@ -1259,7 +890,7 @@ write data;
 
 void McServerAsciiParser::consumeFlushRe(folly::IOBuf& buffer) {
   auto& message =
-    currentMessage_.get<TypedThriftRequest<cpp2::McFlushReRequest>>();
+    currentMessage_.get<McFlushReRequest>();
   %%{
     machine mc_ascii_flush_re_req_body;
     write init nocs;
@@ -1284,7 +915,7 @@ write data;
 
 void McServerAsciiParser::consumeFlushAll(folly::IOBuf& buffer) {
   auto& message =
-    currentMessage_.get<TypedThriftRequest<cpp2::McFlushAllRequest>>();
+    currentMessage_.get<McFlushAllRequest>();
   %%{
     machine mc_ascii_flush_all_req_body;
     write init nocs;
@@ -1305,47 +936,47 @@ variable cs savedCs_;
 new_line = '\r'? '\n';
 
 get = 'get ' @{
-  initGetLike<TypedThriftRequest<cpp2::McGetRequest>>();
+  initGetLike<McGetRequest>();
   fbreak;
 };
 
 gets = 'gets ' @{
-  initGetLike<TypedThriftRequest<cpp2::McGetsRequest>>();
+  initGetLike<McGetsRequest>();
   fbreak;
 };
 
 lease_get = 'lease-get ' @{
-  initGetLike<TypedThriftRequest<cpp2::McLeaseGetRequest>>();
+  initGetLike<McLeaseGetRequest>();
   fbreak;
 };
 
 metaget = 'metaget ' @{
-  initGetLike<TypedThriftRequest<cpp2::McMetagetRequest>>();
+  initGetLike<McMetagetRequest>();
   fbreak;
 };
 
 set = 'set ' @{
-  initSetLike<TypedThriftRequest<cpp2::McSetRequest>>();
+  initSetLike<McSetRequest>();
   fbreak;
 };
 
 add = 'add ' @{
-  initSetLike<TypedThriftRequest<cpp2::McAddRequest>>();
+  initSetLike<McAddRequest>();
   fbreak;
 };
 
 replace = 'replace ' @{
-  initSetLike<TypedThriftRequest<cpp2::McReplaceRequest>>();
+  initSetLike<McReplaceRequest>();
   fbreak;
 };
 
 append = 'append ' @{
-  initSetLike<TypedThriftRequest<cpp2::McAppendRequest>>();
+  initSetLike<McAppendRequest>();
   fbreak;
 };
 
 prepend = 'prepend ' @{
-  initSetLike<TypedThriftRequest<cpp2::McPrependRequest>>();
+  initSetLike<McPrependRequest>();
   fbreak;
 };
 
@@ -1353,7 +984,7 @@ cas = 'cas ' @{
   savedCs_ = mc_ascii_cas_req_body_en_req_body;
   errorCs_ = mc_ascii_cas_req_body_error;
   state_ = State::PARTIAL;
-  currentMessage_.emplace<TypedThriftRequest<cpp2::McCasRequest>>();
+  currentMessage_.emplace<McCasRequest>();
   consumer_ = &McServerAsciiParser::consumeCas;
   fbreak;
 };
@@ -1362,7 +993,7 @@ lease_set = 'lease-set ' @{
   savedCs_ = mc_ascii_lease_set_req_body_en_req_body;
   errorCs_ = mc_ascii_lease_set_req_body_error;
   state_ = State::PARTIAL;
-  currentMessage_.emplace<TypedThriftRequest<cpp2::McLeaseSetRequest>>();
+  currentMessage_.emplace<McLeaseSetRequest>();
   consumer_ = &McServerAsciiParser::consumeLeaseSet;
   fbreak;
 };
@@ -1371,7 +1002,7 @@ delete = 'delete ' @{
   savedCs_ = mc_ascii_delete_req_body_en_req_body;
   errorCs_ = mc_ascii_delete_req_body_error;
   state_ = State::PARTIAL;
-  currentMessage_.emplace<TypedThriftRequest<cpp2::McDeleteRequest>>();
+  currentMessage_.emplace<McDeleteRequest>();
   consumer_ = &McServerAsciiParser::consumeDelete;
   fbreak;
 };
@@ -1380,7 +1011,7 @@ touch = 'touch ' @{
   savedCs_ = mc_ascii_touch_req_body_en_req_body;
   errorCs_ = mc_ascii_touch_req_body_error;
   state_ = State::PARTIAL;
-  currentMessage_.emplace<TypedThriftRequest<cpp2::McTouchRequest>>();
+  currentMessage_.emplace<McTouchRequest>();
   consumer_ = &McServerAsciiParser::consumeTouch;
   fbreak;
 };
@@ -1389,29 +1020,29 @@ shutdown = 'shutdown' @{
   savedCs_ = mc_ascii_shutdown_req_body_en_req_body;
   errorCs_ = mc_ascii_shutdown_req_body_error;
   state_ = State::PARTIAL;
-  currentMessage_.emplace<TypedThriftRequest<cpp2::McShutdownRequest>>();
+  currentMessage_.emplace<McShutdownRequest>();
   consumer_ = &McServerAsciiParser::consumeShutdown;
   fbreak;
 };
 
 incr = 'incr ' @{
-  initArithmetic<TypedThriftRequest<cpp2::McIncrRequest>>();
+  initArithmetic<McIncrRequest>();
   fbreak;
 };
 
 decr = 'decr ' @{
-  initArithmetic<TypedThriftRequest<cpp2::McDecrRequest>>();
+  initArithmetic<McDecrRequest>();
   fbreak;
 };
 
 version = 'version' ' '* new_line @{
-  callback_->onRequest(TypedThriftRequest<cpp2::McVersionRequest>());
+  callback_->onRequest(McVersionRequest());
   finishReq();
   fbreak;
 };
 
 quit = 'quit' ' '* new_line @{
-  callback_->onRequest(TypedThriftRequest<cpp2::McQuitRequest>(),
+  callback_->onRequest(McQuitRequest(),
                        true /* noReply */);
   finishReq();
   fbreak;
@@ -1421,7 +1052,7 @@ stats = 'stats' @{
   savedCs_ = mc_ascii_stats_req_body_en_req_body;
   errorCs_ = mc_ascii_stats_req_body_error;
   state_ = State::PARTIAL;
-  currentMessage_.emplace<TypedThriftRequest<cpp2::McStatsRequest>>();
+  currentMessage_.emplace<McStatsRequest>();
   consumer_ = &McServerAsciiParser::consumeStats;
   fbreak;
 };
@@ -1430,7 +1061,7 @@ exec = ('exec ' | 'admin ') @{
   savedCs_ = mc_ascii_exec_req_body_en_req_body;
   errorCs_ = mc_ascii_exec_req_body_error;
   state_ = State::PARTIAL;
-  currentMessage_.emplace<TypedThriftRequest<cpp2::McExecRequest>>();
+  currentMessage_.emplace<McExecRequest>();
   consumer_ = &McServerAsciiParser::consumeExec;
   fbreak;
 };
@@ -1439,7 +1070,7 @@ flush_re = 'flush_regex ' @{
   savedCs_ = mc_ascii_flush_re_req_body_en_req_body;
   errorCs_ = mc_ascii_flush_re_req_body_error;
   state_ = State::PARTIAL;
-  currentMessage_.emplace<TypedThriftRequest<cpp2::McFlushReRequest>>();
+  currentMessage_.emplace<McFlushReRequest>();
   consumer_ = &McServerAsciiParser::consumeFlushRe;
   fbreak;
 };
@@ -1448,7 +1079,7 @@ flush_all = 'flush_all' @{
   savedCs_ = mc_ascii_flush_all_req_body_en_req_body;
   errorCs_ = mc_ascii_flush_all_req_body_error;
   state_ = State::PARTIAL;
-  currentMessage_.emplace<TypedThriftRequest<cpp2::McFlushAllRequest>>();
+  currentMessage_.emplace<McFlushAllRequest>();
   consumer_ = &McServerAsciiParser::consumeFlushAll;
   fbreak;
 };
@@ -1473,8 +1104,9 @@ void McServerAsciiParser::finishReq() {
 }
 
 McAsciiParserBase::State McServerAsciiParser::consume(folly::IOBuf& buffer) {
-  assert(state_ != State::ERROR && state_ != State::COMPLETE &&
-         !hasReadBuffer());
+  assert(state_ != State::ERROR);
+  assert(state_ != State::COMPLETE);
+  assert(!hasReadBuffer());
   p_ = reinterpret_cast<const char*>(buffer.data());
   pe_ = p_ + buffer.length();
 

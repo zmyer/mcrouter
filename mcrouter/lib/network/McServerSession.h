@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -10,8 +10,8 @@
 #pragma once
 
 #include <folly/IntrusiveList.h>
-#include <folly/io/async/AsyncSocket.h>
 #include <folly/io/async/AsyncSSLSocket.h>
+#include <folly/io/async/AsyncSocket.h>
 #include <folly/io/async/AsyncTransport.h>
 #include <folly/io/async/DelayedDestruction.h>
 #include <folly/io/async/EventBase.h>
@@ -20,12 +20,13 @@
 #include "mcrouter/lib/debug/ConnectionFifo.h"
 #include "mcrouter/lib/network/AsyncMcServerWorkerOptions.h"
 #include "mcrouter/lib/network/ServerMcParser.h"
-#include "mcrouter/lib/network/TypedThriftMessage.h"
-#include "mcrouter/lib/network/gen-cpp2/mc_caret_protocol_types.h"
+#include "mcrouter/lib/network/gen/Memcache.h"
 
-namespace facebook { namespace memcache {
+namespace facebook {
+namespace memcache {
 
 class McServerOnRequest;
+class McServerRequestContext;
 class MultiOpParent;
 class WriteBuffer;
 class WriteBufferIntrusiveList;
@@ -34,17 +35,16 @@ class WriteBufferQueue;
 /**
  * A session owns a single transport, and processes the request/reply stream.
  */
-class McServerSession :
-      public folly::DelayedDestruction,
-      private folly::AsyncSSLSocket::HandshakeCB,
-      private folly::AsyncTransportWrapper::ReadCallback,
-      private folly::AsyncTransportWrapper::WriteCallback {
+class McServerSession : public folly::DelayedDestruction,
+                        private folly::AsyncSSLSocket::HandshakeCB,
+                        private folly::AsyncTransportWrapper::ReadCallback,
+                        private folly::AsyncTransportWrapper::WriteCallback {
  private:
   folly::SafeIntrusiveListHook hook_;
 
  public:
-  using Queue = folly::CountedIntrusiveList<McServerSession,
-                                            &McServerSession::hook_>;
+  using Queue =
+      folly::CountedIntrusiveList<McServerSession, &McServerSession::hook_>;
 
   class StateCallback {
    public:
@@ -149,21 +149,39 @@ class McServerSession :
     return clientCommonName_;
   }
 
+  /**
+   * @return the EventBase for this thread
+   */
+  folly::EventBase& getEventBase() const noexcept {
+    return eventBase_;
+  }
+
+  std::shared_ptr<CpuController> getCpuController() const noexcept {
+    return options_.cpuController;
+  }
+
+  std::shared_ptr<MemoryController> getMemController() const noexcept {
+    return options_.memController;
+  }
+
  private:
   folly::AsyncTransportWrapper::UniquePtr transport_;
   folly::EventBase& eventBase_;
   std::shared_ptr<McServerOnRequest> onRequest_;
   StateCallback& stateCb_;
   AsyncMcServerWorkerOptions options_;
+
+  // Debug fifo fields
   ConnectionFifo debugFifo_;
+  bool hasPendingMultiOp_{false};
 
   enum State {
-    STREAMING,  /* close() was not called */
-    CLOSING,    /* close() was called, waiting on pending requests */
-    CLOSED,     /* close() was called and connection was torn down.
-                   This is a short lived state to prevent another close()
-                   between the first close() and McServerSession destruction
-                   from doing anything */
+    STREAMING, /* close() was not called */
+    CLOSING, /* close() was called, waiting on pending requests */
+    CLOSED, /* close() was called and connection was torn down.
+               This is a short lived state to prevent another close()
+               between the first close() and McServerSession destruction
+               from doing anything */
   };
   State state_{STREAMING};
 
@@ -219,8 +237,7 @@ class McServerSession :
 
   // Compression
   const CompressionCodecMap* compressionCodecMap_{nullptr};
-  CodecIdRange lastSupportedCodecsRange_{0, 0};
-  CompressionCodec* lastCodec_{nullptr};
+  CodecIdRange codecIdRange_ = CodecIdRange::Empty;
 
   ServerMcParser<McServerSession> parser_;
 
@@ -270,8 +287,8 @@ class McServerSession :
   void reply(std::unique_ptr<WriteBuffer> wb, uint64_t reqid);
 
   /**
-   * Called on mc_op_end or connection close to close out an in flight
-   * multop request.
+   * Called when end context is seen (for multi-op requests) or connection
+   * close to close out an in flight multi-op request.
    */
   void processMultiOpEnd();
 
@@ -281,37 +298,37 @@ class McServerSession :
   void readEOF() noexcept override final;
   void readErr(const folly::AsyncSocketException& ex) noexcept override final;
 
-  /* McParser's callback if ASCII request is read into a TypedThriftRequest */
-  template <class ThriftType>
-  void asciiRequestReady(TypedThriftRequest<ThriftType>&& req,
-                         mc_res_t result,
-                         bool noreply);
-  template <class ThriftType>
-  void umbrellaRequestReady(TypedThriftRequest<ThriftType>&& req,
-                            uint64_t reqid);
-  void caretRequestReady(const UmbrellaMessageInfo& headerInfo,
-                         const folly::IOBuf& reqBody);
+  /* McParser's callback if ASCII request is read into a typed request */
+  template <class Request>
+  void asciiRequestReady(Request&& req, mc_res_t result, bool noreply);
+
+  template <class Request>
+  void umbrellaRequestReady(Request&& req, uint64_t reqid);
+  template <class Request>
+  void umbrellaRequestReadyImpl(McServerRequestContext&& ctx, Request&& req);
+
+  void caretRequestReady(
+      const UmbrellaMessageInfo& headerInfo,
+      const folly::IOBuf& reqBody);
+
   void parseError(mc_res_t result, folly::StringPiece reason);
 
   /* Ascii parser callbacks */
-  template <class ThriftType>
-  void onRequest(TypedThriftRequest<ThriftType>&& req, bool noreply) {
+  template <class Request>
+  void onRequest(Request&& req, bool noreply) {
     mc_res_t result = mc_res_unknown;
-    if (req.fullKey().size() > MC_KEY_MAX_LEN_ASCII) {
+    if (req.key().fullKey().size() > MC_KEY_MAX_LEN_ASCII) {
       result = mc_res_bad_key;
     }
     asciiRequestReady(std::move(req), result, noreply);
   }
 
   /* ASCII parser callbacks for special commands */
-  void onRequest(TypedThriftRequest<cpp2::McVersionRequest>&& req,
-                 bool noreply);
+  void onRequest(McVersionRequest&& req, bool noreply);
 
-  void onRequest(TypedThriftRequest<cpp2::McShutdownRequest>&& req,
-                 bool noreply);
+  void onRequest(McShutdownRequest&& req, bool noreply);
 
-  void onRequest(TypedThriftRequest<cpp2::McQuitRequest>&& req,
-                 bool noreply);
+  void onRequest(McQuitRequest&& req, bool noreply);
 
   void multiOpEnd();
 
@@ -330,15 +347,15 @@ class McServerSession :
 
   /* TAsyncTransport's writeCallback */
   void writeSuccess() noexcept override final;
-  void writeErr(size_t bytesWritten,
-                const folly::AsyncSocketException& ex)
-    noexcept override final;
-
+  void writeErr(
+      size_t bytesWritten,
+      const folly::AsyncSocketException& ex) noexcept override final;
 
   /* AsyncSSLSocket::HandshakeCB interface */
-  bool handshakeVer(folly::AsyncSSLSocket* sock,
-                    bool preverifyOk,
-                    X509_STORE_CTX* ctx) noexcept override final;
+  bool handshakeVer(
+      folly::AsyncSSLSocket* sock,
+      bool preverifyOk,
+      X509_STORE_CTX* ctx) noexcept override final;
   void handshakeSuc(folly::AsyncSSLSocket* sock) noexcept override final;
   void handshakeErr(
       folly::AsyncSSLSocket* sock,
@@ -350,18 +367,20 @@ class McServerSession :
   void writeToDebugFifo(const WriteBuffer* wb) noexcept;
 
   /**
-   * Return the compression codec to use for compressing reply.
-   * Nullptr is returned if the reply shouldn't be compressed.
+   * Update the connection's valid range of codec ids that may be used
+   * to compress the reply.  Any requests that are still in flight will be
+   * replied assuming this newly updated range.
    */
-  CompressionCodec* getCodec(const UmbrellaMessageInfo& headerInfo) noexcept;
+  void updateCompressionCodecIdRange(
+      const UmbrellaMessageInfo& headerInfo) noexcept;
 
   McServerSession(
-    folly::AsyncTransportWrapper::UniquePtr transport,
-    std::shared_ptr<McServerOnRequest> cb,
-    StateCallback& stateCb,
-    AsyncMcServerWorkerOptions options,
-    void* userCtxt,
-    const CompressionCodecMap* codecMap);
+      folly::AsyncTransportWrapper::UniquePtr transport,
+      std::shared_ptr<McServerOnRequest> cb,
+      StateCallback& stateCb,
+      AsyncMcServerWorkerOptions options,
+      void* userCtxt,
+      const CompressionCodecMap* codecMap);
 
   McServerSession(const McServerSession&) = delete;
   McServerSession& operator=(const McServerSession&) = delete;
@@ -369,8 +388,7 @@ class McServerSession :
   friend class McServerRequestContext;
   friend class ServerMcParser<McServerSession>;
 };
-
-
-}}  // facebook::memcache
+}
+} // facebook::memcache
 
 #include "McServerSession-inl.h"

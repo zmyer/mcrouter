@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -10,9 +10,14 @@
 #pragma once
 
 #include <chrono>
+#include <memory>
 #include <string>
 
-namespace facebook { namespace memcache {
+namespace facebook {
+namespace memcache {
+
+class CpuController;
+class MemoryController;
 
 struct AsyncMcServerWorkerOptions {
   /**
@@ -79,6 +84,16 @@ struct AsyncMcServerWorkerOptions {
    * If empty, debug fifo is disabled.
    */
   std::string debugFifoPath;
-};
 
-}}  // facebook::memcache
+  /**
+   * The congestion controller for CPU utilization at the server.
+   */
+  std::shared_ptr<CpuController> cpuController;
+
+  /**
+   * The congestion controller for memory utilization at the server.
+   */
+  std::shared_ptr<MemoryController> memController;
+};
+}
+} // facebook::memcache

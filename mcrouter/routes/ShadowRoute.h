@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -13,18 +13,26 @@
 #include <utility>
 #include <vector>
 
-#include <folly/experimental/fibers/FiberManager.h>
 #include <folly/Optional.h>
 
+#include "mcrouter/Proxy.h"
 #include "mcrouter/lib/Operation.h"
 #include "mcrouter/lib/RouteHandleTraverser.h"
-#include "mcrouter/McrouterFiberContext.h"
-#include "mcrouter/proxy.h"
 #include "mcrouter/route.h"
-#include "mcrouter/routes/McrouterRouteHandle.h"
+#include "mcrouter/routes/DefaultShadowPolicy.h"
 #include "mcrouter/routes/ShadowRouteIf.h"
 
-namespace facebook { namespace memcache { namespace mcrouter {
+namespace folly {
+struct dynamic;
+}
+
+namespace facebook {
+namespace memcache {
+
+template <class RouteHandleIf>
+class RouteHandleFactory;
+
+namespace mcrouter {
 
 /**
  * Shadowing using dynamic settings.
@@ -35,22 +43,28 @@ namespace facebook { namespace memcache { namespace mcrouter {
  * Key range might be updated at runtime.
  * We can shadow to multiple shadow destinations for a given normal route.
  */
-template <class ShadowPolicy>
+template <class RouterInfo, class ShadowPolicy>
 class ShadowRoute {
- public:
-  static std::string routeName() { return "shadow"; }
+ private:
+  using RouteHandleIf = typename RouterInfo::RouteHandleIf;
 
-  ShadowRoute(McrouterRouteHandlePtr normalRoute,
-              McrouterShadowData shadowData,
-              ShadowPolicy shadowPolicy)
-      : normal_(std::move(normalRoute)),
-        shadowData_(std::move(shadowData)),
-        shadowPolicy_(std::move(shadowPolicy)) {
+ public:
+  static std::string routeName() {
+    return "shadow";
   }
 
+  ShadowRoute(
+      std::shared_ptr<RouteHandleIf> normalRoute,
+      ShadowData<RouterInfo> shadowData,
+      ShadowPolicy shadowPolicy)
+      : normal_(std::move(normalRoute)),
+        shadowData_(std::move(shadowData)),
+        shadowPolicy_(std::move(shadowPolicy)) {}
+
   template <class Request>
-  void traverse(const Request& req,
-                const RouteHandleTraverser<McrouterRouteHandleIf>& t) const {
+  void traverse(
+      const Request& req,
+      const RouteHandleTraverser<RouteHandleIf>& t) const {
     t(*normal_, req);
     for (auto& shadowData : shadowData_) {
       t(*shadowData.first, req);
@@ -65,22 +79,13 @@ class ShadowRoute {
       if (shouldShadow(req, iter.second.get())) {
         if (!adjustedReq) {
           adjustedReq = std::make_shared<Request>(
-            shadowPolicy_.updateRequestForShadowing(req));
+              shadowPolicy_.updateRequestForShadowing(req));
         }
         if (!normalReply && shadowPolicy_.shouldDelayShadow(req)) {
           normalReply = normal_->route(*adjustedReq);
         }
         auto shadow = iter.first;
-        if (iter.second->validateRepliesFlag()) {
-          normalReply = normal_->route(*adjustedReq);
-          // this will spawn the fiber after copying required data
-          // to validate from the normal Reply
-          sendAndValidateRequest(
-              *normalReply , std::move(shadow), adjustedReq);
-
-        } else {
-          dispatchShadowRequest(std::move(shadow), adjustedReq);
-        }
+        dispatchShadowRequest(std::move(shadow), adjustedReq);
       }
     }
 
@@ -92,52 +97,48 @@ class ShadowRoute {
   }
 
  private:
-  const McrouterRouteHandlePtr normal_;
-  const McrouterShadowData shadowData_;
+  const std::shared_ptr<RouteHandleIf> normal_;
+  const ShadowData<RouterInfo> shadowData_;
   ShadowPolicy shadowPolicy_;
 
   template <class Request>
   bool shouldShadow(const Request& req, ShadowSettings* settings) const {
     auto range = settings->keyRange();
-    return range.first <= req.routingKeyHash() &&
-                          req.routingKeyHash() <= range.second;
+    return range.first <= req.key().routingKeyHash() &&
+        req.key().routingKeyHash() <= range.second;
   }
 
   template <class Request>
-  void dispatchShadowRequest(std::shared_ptr<McrouterRouteHandleIf> shadow,
-                             std::shared_ptr<Request> adjustedReq) const;
-
-  template <class Request>
-  void sendAndValidateRequest(const ReplyT<Request>& normalReply,
-                              std::shared_ptr<McrouterRouteHandleIf> shadow,
-                              std::shared_ptr<Request> adjustedReq) const;
-
-  template <class GetRequest>
-  void sendAndValidateRequestGetImpl(
-      const ReplyT<GetRequest>& normalReply,
-      std::shared_ptr<McrouterRouteHandleIf> shadow,
-      std::shared_ptr<GetRequest> adjustedReq)
-      const;
-
-  void sendAndValidateRequest(
-      const McReply& normalReply,
-      std::shared_ptr<McrouterRouteHandleIf> shadow,
-      std::shared_ptr<McRequestWithMcOp<mc_op_get>> adjustedReq)
-      const {
-
-    sendAndValidateRequestGetImpl(normalReply, shadow, adjustedReq);
-  }
-
-  void sendAndValidateRequest(
-      const TypedThriftReply<cpp2::McGetReply>& normalReply,
-      std::shared_ptr<McrouterRouteHandleIf> shadow,
-      std::shared_ptr<TypedThriftRequest<cpp2::McGetRequest>> adjustedReq)
-      const {
-
-    sendAndValidateRequestGetImpl(normalReply, shadow, adjustedReq);
-  }
+  void dispatchShadowRequest(
+      std::shared_ptr<RouteHandleIf> shadow,
+      std::shared_ptr<Request> adjustedReq) const;
 };
 
-}}}  // facebook::memcache::mcrouter
+template <class RouterInfo>
+std::shared_ptr<typename RouterInfo::RouteHandleIf> makeShadowRouteDefault(
+    std::shared_ptr<typename RouterInfo::RouteHandleIf> normalRoute,
+    ShadowData<RouterInfo> shadowData,
+    DefaultShadowPolicy shadowPolicy);
+
+template <class RouterInfo>
+std::vector<std::shared_ptr<typename RouterInfo::RouteHandleIf>>
+makeShadowRoutes(
+    RouteHandleFactory<typename RouterInfo::RouteHandleIf>& factory,
+    const folly::dynamic& json,
+    std::vector<std::shared_ptr<typename RouterInfo::RouteHandleIf>> children,
+    ProxyBase& proxy,
+    ExtraRouteHandleProviderIf<RouterInfo>& extraProvider);
+
+template <class RouterInfo>
+std::vector<std::shared_ptr<typename RouterInfo::RouteHandleIf>>
+makeShadowRoutes(
+    RouteHandleFactory<typename RouterInfo::RouteHandleIf>& factory,
+    const folly::dynamic& json,
+    ProxyBase& proxy,
+    ExtraRouteHandleProviderIf<RouterInfo>& extraProvider);
+
+} // mcrouter
+} // memcache
+} // facebook
 
 #include "ShadowRoute-inl.h"

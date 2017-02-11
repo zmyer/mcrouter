@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2015, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -11,29 +11,33 @@
 
 #include <memory>
 
-#include "mcrouter/lib/test/RouteHandleTestUtil.h"
+#include "mcrouter/CarbonRouterInstance.h"
 #include "mcrouter/McrouterFiberContext.h"
-#include "mcrouter/McrouterInstance.h"
 #include "mcrouter/ProxyRequestContext.h"
+#include "mcrouter/lib/test/RouteHandleTestUtil.h"
 #include "mcrouter/routes/McrouterRouteHandle.h"
 
-namespace facebook { namespace memcache { namespace mcrouter {
+namespace facebook {
+namespace memcache {
+namespace mcrouter {
 
 using TestHandle = TestHandleImpl<McrouterRouteHandleIf>;
 
 /**
  * Create mcrouter instance for test
  */
-McrouterInstance* getTestRouter();
+CarbonRouterInstance<McrouterRouterInfo>* getTestRouter();
 
 /**
  * Create recording ProxyRequestContext for fiber locals
  */
-std::shared_ptr<ProxyRequestContext> getTestContext();
+std::shared_ptr<ProxyRequestContextWithInfo<McrouterRouterInfo>>
+getTestContext();
 
 /**
  * Set valid McrouterFiberContext in fiber locals
  */
 void mockFiberContext();
-
-}}} // facebook::memcache::mcrouter
+}
+}
+} // facebook::memcache::mcrouter

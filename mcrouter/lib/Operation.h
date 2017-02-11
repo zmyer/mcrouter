@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -9,12 +9,10 @@
  */
 #pragma once
 
-namespace facebook { namespace memcache {
+namespace facebook {
+namespace memcache {
 
 template <typename Request>
-struct ReplyType;
-
-template <typename Request>
-using ReplyT = typename ReplyType<Request>::type;
-
-}} // facebook::memcache
+using ReplyT = typename Request::reply_type;
+}
+} // facebook::memcache

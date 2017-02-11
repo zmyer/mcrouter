@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -13,14 +13,12 @@
 #include <string>
 #include <unordered_map>
 
-#include <folly/io/IOBuf.h>
 #include <folly/Memory.h>
 #include <folly/Range.h>
+#include <folly/io/IOBuf.h>
 
-#include "mcrouter/lib/McRequest.h"
-#include "mcrouter/lib/network/TypedThriftMessage.h"
-
-namespace facebook { namespace memcache {
+namespace facebook {
+namespace memcache {
 
 /**
  * Mock Memcached hash table implementation.
@@ -34,22 +32,14 @@ class MockMc {
     uint64_t flags{0};
 
     explicit Item(std::unique_ptr<folly::IOBuf> v);
-    template <class ThriftType>
-    explicit Item(const TypedThriftRequest<ThriftType>& req)
-      : value(req.valuePtrUnsafe()
-               ? req.valuePtrUnsafe()->clone()
-               : folly::make_unique<folly::IOBuf>()),
-        exptime(req.exptime() != 0 && req.exptime() <= 60*60*24*30
-            ? req.exptime() + time(nullptr)
-            : req.exptime()),
-        flags(req.flags()) {}
-    template <class Operation>
-    explicit Item(const McRequestWithOp<Operation>& req)
-      : value(req.value().clone()),
-        exptime(req.exptime() != 0 && req.exptime() <= 60*60*24*30
-            ? req.exptime() + time(nullptr)
-            : req.exptime()),
-        flags(req.flags()) {}
+    template <class Request>
+    explicit Item(const Request& req)
+        : value(req.value().clone()),
+          exptime(
+              req.exptime() != 0 && req.exptime() <= 60 * 60 * 24 * 30
+                  ? req.exptime() + time(nullptr)
+                  : req.exptime()),
+          flags(req.flags()) {}
 
     Item(const folly::IOBuf& v, int32_t t, uint64_t f);
   };
@@ -143,11 +133,7 @@ class MockMc {
 
   std::pair<const Item*, uint64_t> gets(folly::StringPiece key);
 
-  enum class CasResult {
-    NOT_FOUND,
-    STORED,
-    EXISTS
-  };
+  enum class CasResult { NOT_FOUND, STORED, EXISTS };
 
   CasResult cas(folly::StringPiece key, Item item, uint64_t token);
 
@@ -169,8 +155,7 @@ class MockMc {
     uint64_t leaseToken{0};
     uint64_t casToken{0};
 
-    explicit CacheItem(Item it)
-        : item(std::move(it)) {
+    explicit CacheItem(Item it) : item(std::move(it)) {
       updateCasToken();
     }
 
@@ -179,8 +164,8 @@ class MockMc {
   };
   std::unordered_map<std::string, CacheItem> citems_;
 
-  std::unordered_map<std::string, CacheItem>::iterator
-  findUnexpired(folly::StringPiece key);
+  std::unordered_map<std::string, CacheItem>::iterator findUnexpired(
+      folly::StringPiece key);
 };
-
-}}  // facebook::memcache
+}
+} // facebook::memcache

@@ -6,31 +6,36 @@ noinst_LIBRARIES = libmcroutercore.a
 bin_PROGRAMS = mcrouter
 
 BUILT_SOURCES = \
-  lib/mc/ascii_client.c \
   lib/network/McAsciiParser-gen.cpp
-
-lib/mc/ascii_client.c: lib/mc/ascii_client.rl
-	ragel -G1 -o lib/mc/ascii_client.c lib/mc/ascii_client.rl
 
 lib/network/McAsciiParser-gen.cpp: lib/network/McAsciiParser.rl
 	ragel -G1 -o lib/network/McAsciiParser-gen.cpp lib/network/McAsciiParser.rl
 
 CLEANFILES = \
-  lib/mc/ascii_client.c \
   lib/network/McAsciiParser-gen.cpp
 
 libmcroutercore_a_SOURCES = \
-  async.cpp \
-  async.h \
-  awriter.h \
+  AsyncLog.cpp \
+  AsyncLog.h \
+  AsyncTimer.h \
+  AsyncWriter.cpp \
+  AsyncWriter.h \
+  AsyncWriterEntry.h \
   CallbackPool-inl.h \
   CallbackPool.h \
+  CarbonRouterClient-inl.h \
+  CarbonRouterClient.h \
+  CarbonRouterClientBase.cpp \
+  CarbonRouterClientBase.h \
+  CarbonRouterInstance-inl.h \
+  CarbonRouterInstance.cpp \
+  CarbonRouterInstance.h \
+  CarbonRouterInstanceBase.cpp \
+  CarbonRouterInstanceBase.h \
   Clock.h \
   ConfigApi.cpp \
   ConfigApi.h \
   ConfigApiIf.h \
-  CyclesObserver.cpp \
-  CyclesObserver.h \
   ExponentialSmoothData.h \
   FileDataProvider.cpp \
   FileDataProvider.h \
@@ -44,15 +49,12 @@ libmcroutercore_a_SOURCES = \
   mcrouter_config.cpp \
   mcrouter_config.h \
   mcrouter_options_list.h \
-  McrouterClient-inl.h \
-  McrouterClient.cpp \
   McrouterClient.h \
   McrouterFiberContext.cpp \
   McrouterFiberContext.h \
-  McrouterInstance.cpp \
   McrouterInstance.h \
-  McrouterLogFailure.h \
   McrouterLogFailure.cpp \
+  McrouterLogFailure.h \
   McrouterLogger.cpp \
   McrouterLogger.h \
   Observable-inl.h \
@@ -64,10 +66,13 @@ libmcroutercore_a_SOURCES = \
   OptionsUtil.h \
   PoolFactory.cpp \
   PoolFactory.h \
-  proxy-inl.h \
-  proxy.cpp \
-  proxy.h \
-  ProxyConfig.cpp \
+  Proxy-inl.h \
+  Proxy.cpp \
+  Proxy.h \
+  ProxyBase-inl.h \
+  ProxyBase.cpp \
+  ProxyBase.h \
+  ProxyConfig-inl.h \
   ProxyConfig.h \
   ProxyConfigBuilder.cpp \
   ProxyConfigBuilder.h \
@@ -76,21 +81,24 @@ libmcroutercore_a_SOURCES = \
   ProxyDestination.h \
   ProxyDestinationMap.cpp \
   ProxyDestinationMap.h \
-  ProxyRequestContext-inl.h \
   ProxyRequestContext.cpp \
   ProxyRequestContext.h \
+  ProxyRequestContextTyped-inl.h \
+  ProxyRequestContextTyped.h \
   ProxyRequestLogger-inl.h \
-  ProxyRequestLogger.cpp \
   ProxyRequestLogger.h \
-  ProxyThread.cpp \
+  ProxyRequestPriority.h \
+  ProxyStats.cpp \
+  ProxyStats.h \
+  ProxyThread-inl.h \
   ProxyThread.h \
   route.cpp \
   route.h \
-  routes/AllAsyncRoute.cpp \
-  routes/AllFastestRoute.cpp \
-  routes/AllInitialRoute.cpp \
-  routes/AllMajorityRoute.cpp \
-  routes/AllSyncRoute.cpp \
+  routes/AllAsyncRouteFactory.h \
+  routes/AllFastestRouteFactory.h \
+  routes/AllInitialRouteFactory.h \
+  routes/AllMajorityRouteFactory.h \
+  routes/AllSyncRouteFactory.h \
   routes/AsynclogRoute.cpp \
   routes/AsynclogRoute.h \
   routes/BigValueRoute-inl.h \
@@ -98,59 +106,51 @@ libmcroutercore_a_SOURCES = \
   routes/BigValueRoute.h \
   routes/BigValueRouteIf.h \
   routes/DefaultShadowPolicy.h \
-  routes/DestinationRoute.cpp \
   routes/DestinationRoute.h \
-  routes/DevNullRoute.cpp \
   routes/DevNullRoute.h \
-  routes/ErrorRoute.cpp \
+  routes/ErrorRouteFactory.h \
   routes/ExtraRouteHandleProviderIf.h \
   routes/FailoverPolicy.h \
   routes/FailoverRateLimiter.cpp \
   routes/FailoverRateLimiter.h \
-  routes/FailoverRoute.cpp \
+  routes/FailoverRoute-inl.h \
   routes/FailoverRoute.h \
   routes/FailoverWithExptimeRoute.cpp \
   routes/HashRoute.cpp \
-  routes/HostIdRoute.cpp \
-  routes/L1L2CacheRoute.cpp \
-  routes/LatestRoute.cpp \
-  routes/LoggingRoute.cpp \
-  routes/McExtraRouteHandleProvider.cpp \
+  routes/HostIdRouteFactory.h \
+  routes/L1L2CacheRouteFactory.h \
+  routes/LatestRoute.h \
+  routes/McExtraRouteHandleProvider-inl.h \
   routes/McExtraRouteHandleProvider.h \
   routes/McImportResolver.cpp \
   routes/McImportResolver.h \
   routes/McRouteHandleBuilder.h \
+  routes/McRouteHandleProvider-inl.h \
   routes/McRouteHandleProvider.cpp \
   routes/McRouteHandleProvider.h \
   routes/McrouterRouteHandle.h \
-  routes/MigrateRoute.cpp \
-  routes/MissFailoverRoute.cpp \
+  routes/MigrateRouteFactory.h \
   routes/MissFailoverRoute.h \
   routes/ModifyExptimeRoute.cpp \
   routes/ModifyExptimeRoute.h \
-  routes/ModifyKeyRoute.cpp \
   routes/ModifyKeyRoute.h \
   routes/NullRoute.cpp \
-  routes/OperationSelectorRoute.cpp \
+  routes/OperationSelectorRoute-inl.h \
   routes/OperationSelectorRoute.h \
-  routes/OutstandingLimitRoute.cpp \
   routes/OutstandingLimitRoute.h \
-  routes/PrefixSelectorRoute.cpp \
   routes/PrefixSelectorRoute.h \
-  routes/ProxyRoute.cpp \
+  routes/ProxyRoute-inl.h \
   routes/ProxyRoute.h \
-  routes/RandomRoute.cpp \
+  routes/RandomRouteFactory.h \
   routes/RateLimiter.cpp \
   routes/RateLimiter.h \
-  routes/RateLimitRoute.cpp \
   routes/RateLimitRoute.h \
   routes/RootRoute.h \
-  routes/RouteHandleMap.cpp \
+  routes/RouteHandleMap-inl.h \
   routes/RouteHandleMap.h \
-  routes/RoutePolicyMap.cpp \
+  routes/RoutePolicyMap-inl.h \
   routes/RoutePolicyMap.h \
   routes/RouteSelectorMap.h \
-  routes/ShadowRoute.cpp \
   routes/ShadowRoute.h \
   routes/ShadowRoute-inl.h \
   routes/ShadowRouteIf.h \
@@ -160,7 +160,6 @@ libmcroutercore_a_SOURCES = \
   routes/ShardSplitRoute.h \
   routes/ShardSplitter.cpp \
   routes/ShardSplitter.h \
-  routes/SlowWarmUpRoute.cpp \
   routes/SlowWarmupRoute.h \
   routes/SlowWarmUpRouteSettings.cpp \
   routes/SlowWarmupRouteSettings.h \
@@ -171,9 +170,8 @@ libmcroutercore_a_SOURCES = \
   RoutingPrefix.h \
   RuntimeVarsData.cpp \
   RuntimeVarsData.h \
-  ServiceInfo.cpp \
+  ServiceInfo-inl.h \
   ServiceInfo.h \
-  ShadowValidationData.h \
   stat_list.h \
   stats.cpp \
   stats.h \
@@ -183,13 +181,12 @@ libmcroutercore_a_SOURCES = \
   TkoLog.cpp \
   TkoLog.h \
   TkoTracker.cpp \
-  TkoTracker.h \
-  TokenBucket.h
+  TkoTracker.h
 
 mcrouter_SOURCES = \
   main.cpp \
-  server.cpp \
-  server.h \
+  Server-inl.h \
+  Server.h \
   ServerOnRequest.h \
   standalone_options.h \
   standalone_options_list.h

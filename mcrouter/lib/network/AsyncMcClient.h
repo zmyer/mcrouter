@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -13,16 +13,18 @@
 #include <functional>
 #include <utility>
 
-#include "mcrouter/lib/network/ConnectionOptions.h"
 #include "mcrouter/lib/Operation.h"
+#include "mcrouter/lib/network/ConnectionOptions.h"
 
 namespace folly {
 class EventBase;
 } // folly
 
-namespace facebook { namespace memcache {
+namespace facebook {
+namespace memcache {
 
 class AsyncMcClientImpl;
+struct ReplyStatsContext;
 
 /**
  * A class for network communication with memcache protocol.
@@ -35,9 +37,7 @@ class AsyncMcClientImpl;
  */
 class AsyncMcClient {
  public:
-
-  AsyncMcClient(folly::EventBase& eventBase,
-                ConnectionOptions options);
+  AsyncMcClient(folly::EventBase& eventBase, ConnectionOptions options);
 
   /**
    * Close connection and fail all outstanding requests immediately.
@@ -58,8 +58,8 @@ class AsyncMcClient {
    *       some requests left, for wich reply callback wasn't called yet.
    */
   void setStatusCallbacks(
-    std::function<void()> onUp,
-    std::function<void(bool aborting)> onDown);
+      std::function<void()> onUp,
+      std::function<void(bool aborting)> onDown);
 
   /**
    * Set callbacks for when requests state change.
@@ -83,8 +83,10 @@ class AsyncMcClient {
    *       stack and will send request only when we loop EventBase.
    */
   template <class Request>
-  ReplyT<Request> sendSync(const Request& request,
-                           std::chrono::milliseconds timeout);
+  ReplyT<Request> sendSync(
+      const Request& request,
+      std::chrono::milliseconds timeout,
+      ReplyStatsContext* replyContext = nullptr);
 
   /**
    * Set throttling options.
@@ -133,10 +135,21 @@ class AsyncMcClient {
    */
   const folly::AsyncTransportWrapper* getTransport();
 
+  /**
+   * @return Retransmits per packet used to detect lossy connections
+   */
+  double getRetransmissionInfo();
+
+  /**
+   * Get the drop probability
+   */
+  template <class Request>
+  double getDropProbability() const;
+
  private:
   std::shared_ptr<AsyncMcClientImpl> base_;
 };
-
-}} // facebook::memcache
+}
+} // facebook::memcache
 
 #include "AsyncMcClient-inl.h"

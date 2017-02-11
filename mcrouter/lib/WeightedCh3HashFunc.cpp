@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -9,22 +9,44 @@
  */
 #include "WeightedCh3HashFunc.h"
 
-#include <folly/dynamic.h>
 #include <folly/SpookyHashV2.h>
+#include <folly/dynamic.h>
 
 #include "mcrouter/lib/fbi/cpp/util.h"
 #include "mcrouter/lib/fbi/hash.h"
 
-namespace facebook { namespace memcache {
+namespace facebook {
+namespace memcache {
 
 namespace {
 const size_t kNumTries = 32;
 const uint32_t kHashSeed = 0xface2014;
-}  // anonymous namespace
+} // anonymous namespace
+
+std::vector<double> ch3wParseWeights(const folly::dynamic& json, size_t n) {
+  std::vector<double> weights;
+  checkLogic(
+      json.isObject() && json.count("weights"),
+      "WeightedCh3HashFunc: not an object or no weights");
+  checkLogic(
+      json["weights"].isArray(), "WeightedCh3HashFunc: weights is not array");
+  const auto& jWeights = json["weights"];
+  LOG_IF(ERROR, jWeights.size() < n)
+      << "WeightedCh3HashFunc: CONFIG IS BROKEN!!! number of weights ("
+      << jWeights.size() << ") is smaller than number of servers (" << n
+      << "). Missing weights are set to 0.5";
+  for (size_t i = 0; i < std::min(n, jWeights.size()); ++i) {
+    const auto& weight = jWeights[i];
+    checkLogic(weight.isNumber(), "WeightedCh3HashFunc: weight is not number");
+    weights.push_back(weight.asDouble());
+  }
+  weights.resize(n, 0.5);
+  return weights;
+}
 
 size_t weightedCh3Hash(
-  folly::StringPiece key, const std::vector<double>& weights) {
-
+    folly::StringPiece key,
+    const std::vector<double>& weights) {
   auto n = weights.size();
   checkLogic(n && n <= furc_maximum_pool_size(), "Invalid pool size: {}", n);
   size_t salt = 0;
@@ -36,8 +58,8 @@ size_t weightedCh3Hash(
 
     /* Use 32-bit hash, but store in 64-bit ints so that
        we don't have to deal with overflows */
-    uint64_t p = folly::hash::SpookyHashV2::Hash32(key.data(), key.size(),
-                                                   kHashSeed);
+    uint64_t p =
+        folly::hash::SpookyHashV2::Hash32(key.data(), key.size(), kHashSeed);
     assert(0 <= weights[index] && weights[index] <= 1.0);
     uint64_t w = weights[index] * std::numeric_limits<uint32_t>::max();
 
@@ -61,29 +83,14 @@ size_t weightedCh3Hash(
 }
 
 WeightedCh3HashFunc::WeightedCh3HashFunc(std::vector<double> weights)
-    : weights_(std::move(weights)) {
-}
+    : weights_(std::move(weights)) {}
 
 WeightedCh3HashFunc::WeightedCh3HashFunc(const folly::dynamic& json, size_t n) {
-  checkLogic(json.isObject() && json.count("weights"),
-             "WeightedCh3HashFunc: not an object or no weights");
-  checkLogic(json["weights"].isArray(),
-             "WeightedCh3HashFunc: weights is not array");
-  const auto& jWeights = json["weights"];
-  LOG_IF(ERROR, jWeights.size() < n)
-    << "WeightedCh3HashFunc: CONFIG IS BROKEN!!! number of weights ("
-    << jWeights.size() << ") is smaller than number of servers (" << n
-    << "). Missing weights are set to 0.5";
-  for (size_t i = 0; i < std::min(n, jWeights.size()); ++i) {
-    const auto& weight = jWeights[i];
-    checkLogic(weight.isNumber(), "WeightedCh3HashFunc: weight is not number");
-    weights_.push_back(weight.asDouble());
-  }
-  weights_.resize(n, 0.5);
+  weights_ = ch3wParseWeights(json, n);
 }
 
 size_t WeightedCh3HashFunc::operator()(folly::StringPiece key) const {
   return weightedCh3Hash(key, weights_);
 }
-
-}}  // facebook::memcache
+}
+} // facebook::memcache

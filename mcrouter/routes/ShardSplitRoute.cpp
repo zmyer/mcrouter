@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2015, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -9,33 +9,44 @@
  */
 #include "ShardSplitRoute.h"
 
-namespace facebook { namespace memcache { namespace mcrouter {
+#include "mcrouter/lib/config/RouteHandleFactory.h"
 
-McrouterRouteHandlePtr makeShardSplitRoute(
-  McrouterRouteHandlePtr rh,
-  ShardSplitter shardSplitter) {
-
-  return std::make_shared<McrouterRouteHandle<ShardSplitRoute>>(
-    std::move(rh), std::move(shardSplitter));
-}
+namespace facebook {
+namespace memcache {
+namespace mcrouter {
 
 std::string shardSplitSuffix(size_t offset) {
+  if (!offset) {
+    return "";
+  }
+
   std::string ret;
-  ret.push_back('a' + (offset % 26));
-  ret.push_back('a' + (offset / 26));
+  ret.push_back('a' + ((offset - 1) % 26));
+  ret.push_back('a' + ((offset - 1) / 26));
   return ret;
 }
 
-std::string createSplitKey(folly::StringPiece fullKey,
-                           size_t offset,
-                           folly::StringPiece shard) {
+namespace detail {
+
+std::string createSplitKey(
+    folly::StringPiece fullKey,
+    size_t offset,
+    folly::StringPiece shard) {
+  if (!offset) {
+    return fullKey.str();
+  }
+
   std::string newKey;
   newKey.reserve(fullKey.size() + 2);
   newKey.append(fullKey.begin(), shard.end());
-  newKey.push_back('a' + (offset % 26));
-  newKey.push_back('a' + (offset / 26));
+  newKey.push_back('a' + ((offset - 1) % 26));
+  newKey.push_back('a' + ((offset - 1) / 26));
   newKey.append(shard.end(), fullKey.end());
   return newKey;
 }
 
-}}}  // facebook::memcache::mcrouter
+} // detail
+
+} // mcrouter
+} // memcache
+} // facebook

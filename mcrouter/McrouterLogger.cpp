@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -19,17 +19,21 @@
 #include <boost/filesystem/path.hpp>
 
 #include <folly/DynamicConverter.h>
-#include <folly/json.h>
 #include <folly/ThreadName.h>
+#include <folly/dynamic.h>
+#include <folly/json.h>
 
-#include "mcrouter/config.h"
-#include "mcrouter/lib/fbi/cpp/util.h"
-#include "mcrouter/McrouterInstance.h"
+#include "mcrouter/CarbonRouterInstanceBase.h"
 #include "mcrouter/McrouterLogFailure.h"
 #include "mcrouter/OptionsUtil.h"
+#include "mcrouter/ProxyBase.h"
+#include "mcrouter/config.h"
+#include "mcrouter/lib/fbi/cpp/util.h"
 #include "mcrouter/stats.h"
 
-namespace facebook { namespace memcache { namespace mcrouter {
+namespace facebook {
+namespace memcache {
+namespace mcrouter {
 
 namespace {
 
@@ -37,8 +41,9 @@ const char* kStatsSfx = "stats";
 const char* kStatsStartupOptionsSfx = "startup_options";
 const char* kConfigSourcesInfoFileName = "config_sources_info";
 
-std::string stats_file_path(const McrouterOptions& opts,
-                            const std::string& suffix) {
+std::string stats_file_path(
+    const McrouterOptions& opts,
+    const std::string& suffix) {
   boost::filesystem::path path(opts.stats_root);
   path /= getStatPrefix(opts) + "." + suffix;
   return path.string();
@@ -47,9 +52,10 @@ std::string stats_file_path(const McrouterOptions& opts,
 /**
  * Writes string to a file.
  */
-void write_file(const McrouterOptions& opts,
-                const std::string& suffix,
-                const std::string& str) {
+void write_file(
+    const McrouterOptions& opts,
+    const std::string& suffix,
+    const std::string& str) {
   try {
     // In case the dir was deleted some time after mcrouter started
     if (!ensureDirExistsAndWritable(opts.stats_root)) {
@@ -68,25 +74,23 @@ void write_file(const McrouterOptions& opts,
  * to disk in json format. The suffix is the file extension. If the stats root
  * directory is ever removed or is unwriteable, we just give up.
  */
-void write_stats_file(const McrouterOptions& opts,
-                      const std::string& suffix,
-                      const folly::dynamic& stats) {
+void write_stats_file(
+    const McrouterOptions& opts,
+    const std::string& suffix,
+    const folly::dynamic& stats) {
   auto statsString = toPrettySortedJson(stats) + "\n";
   write_file(opts, suffix, statsString);
 }
 
-void write_stats_to_disk(const McrouterOptions& opts,
-                         const std::vector<stat_t>& stats) {
+void write_stats_to_disk(
+    const McrouterOptions& opts,
+    const std::vector<stat_t>& stats,
+    const folly::dynamic& requestStats) {
   try {
     std::string prefix = getStatPrefix(opts) + ".";
     folly::dynamic jstats = folly::dynamic::object;
 
     for (size_t i = 0; i < stats.size(); ++i) {
-      if (opts.logging_rtt_outlier_threshold_us == 0 &&
-          (stats[i].group & outlier_stats)) {
-        // outlier detection is disabled
-        continue;
-      }
       if (stats[i].group & ods_stats) {
         auto key = prefix + stats[i].name.str();
 
@@ -109,34 +113,37 @@ void write_stats_to_disk(const McrouterOptions& opts,
       }
     }
 
+    for (const auto& kv : requestStats.items()) {
+      jstats[folly::to<std::string>(prefix, kv.first.asString())] = kv.second;
+    }
+
     write_stats_file(opts, kStatsSfx, jstats);
   } catch (const std::exception& e) {
     VLOG(1) << "Failed to write stats to disk: " << e.what();
   }
 }
 
-void write_config_sources_info_to_disk(McrouterInstance& router) {
+void write_config_sources_info_to_disk(CarbonRouterInstanceBase& router) {
   auto config_info_json = router.configApi().getConfigSourcesInfo();
 
   try {
     boost::filesystem::path path(router.opts().stats_root);
     path /= getStatPrefix(router.opts()) + "." + kConfigSourcesInfoFileName;
     atomicallyWriteFileToDisk(
-      toPrettySortedJson(config_info_json),
-      path.string());
+        toPrettySortedJson(config_info_json), path.string());
   } catch (...) {
     LOG(ERROR) << "Error occured while writing configuration info to disk";
   }
 }
 
-}  // anonymous namespace
+} // anonymous namespace
 
-McrouterLogger::McrouterLogger(McrouterInstance& router,
-  std::unique_ptr<AdditionalLoggerIf> additionalLogger)
+McrouterLogger::McrouterLogger(
+    CarbonRouterInstanceBase& router,
+    std::unique_ptr<AdditionalLoggerIf> additionalLogger)
     : router_(router),
       additionalLogger_(std::move(additionalLogger)),
-      pid_(getpid()) {
-}
+      pid_(getpid()) {}
 
 McrouterLogger::~McrouterLogger() {
   stop();
@@ -148,28 +155,32 @@ bool McrouterLogger::start() {
   }
 
   if (!ensureDirExistsAndWritable(router_.opts().stats_root)) {
-    LOG(ERROR) << "Can't create or chmod " << router_.opts().stats_root <<
-                  ", disabling stats logging";
+    LOG(ERROR) << "Can't create or chmod " << router_.opts().stats_root
+               << ", disabling stats logging";
     return false;
   }
 
   auto path = stats_file_path(router_.opts(), kStatsStartupOptionsSfx);
-  if (std::find(touchStatsFilepaths_.begin(), touchStatsFilepaths_.end(), path)
-      == touchStatsFilepaths_.end()) {
+  if (std::find(
+          touchStatsFilepaths_.begin(), touchStatsFilepaths_.end(), path) ==
+      touchStatsFilepaths_.end()) {
     touchStatsFilepaths_.push_back(std::move(path));
   }
 
   running_ = true;
   const std::string threadName = "mcrtr-stats-logger";
   try {
-    loggerThread_ = std::thread(
-        std::bind(&McrouterLogger::loggerThreadRun, this));
+    loggerThread_ =
+        std::thread(std::bind(&McrouterLogger::loggerThreadRun, this));
     folly::setThreadName(loggerThread_.native_handle(), threadName);
   } catch (const std::system_error& e) {
     running_ = false;
-    MC_LOG_FAILURE(router_.opts(), memcache::failure::Category::kSystemError,
-                   "Can not start McrouterLogger thread {}: {}",
-                   threadName, e.what());
+    MC_LOG_FAILURE(
+        router_.opts(),
+        memcache::failure::Category::kSystemError,
+        "Can not start McrouterLogger thread {}: {}",
+        threadName,
+        e.what());
   }
 
   return running_;
@@ -207,9 +218,9 @@ void McrouterLogger::loggerThreadRun() {
 void McrouterLogger::loggerThreadSleep() {
   std::unique_lock<std::mutex> lock(loggerThreadMutex_);
   loggerThreadCv_.wait_for(
-    lock,
-    std::chrono::milliseconds(router_.opts().stats_logging_interval),
-    [this]() { return !running_; });
+      lock,
+      std::chrono::milliseconds(router_.opts().stats_logging_interval),
+      [this]() { return !running_; });
 }
 
 void McrouterLogger::logStartupOptions() {
@@ -223,6 +234,15 @@ void McrouterLogger::log() {
   std::vector<stat_t> stats(num_stats);
   prepare_stats(router_, stats.data());
 
+  folly::dynamic requestStats(folly::dynamic::object());
+  for (size_t i = 0; i < router_.opts().num_proxies; ++i) {
+    const auto proxyRequestStats =
+        router_.getProxyBase(i)->dumpRequestStats(true /* filterZeroes */);
+    for (const auto& k : proxyRequestStats.keys()) {
+      requestStats.setDefault(k, 0) += proxyRequestStats[k];
+    }
+  }
+
   for (int i = 0; i < num_stats; ++i) {
     if (stats[i].group & rate_stats) {
       stats[i].type = stat_double;
@@ -230,10 +250,13 @@ void McrouterLogger::log() {
     } else if (stats[i].group & max_stats) {
       stats[i].type = stat_uint64;
       stats[i].data.uint64 = stats_aggregate_max_value(router_, i);
+    } else if (stats[i].group & max_max_stats) {
+      stats[i].type = stat_uint64;
+      stats[i].data.uint64 = stats_aggregate_max_max_value(router_, i);
     }
   }
 
-  write_stats_to_disk(router_.opts(), stats);
+  write_stats_to_disk(router_.opts(), stats, requestStats);
   write_config_sources_info_to_disk(router_);
 
   for (const auto& filepath : touchStatsFilepaths_) {
@@ -245,4 +268,6 @@ void McrouterLogger::log() {
   }
 }
 
-}}}  // facebook::memcache::mcrouter
+} // mcrouter
+} // memcache
+} // facebook

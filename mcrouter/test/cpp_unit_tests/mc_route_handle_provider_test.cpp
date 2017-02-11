@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -9,56 +9,58 @@
  */
 #include <string>
 
-#include <glog/logging.h>
 #include <gtest/gtest.h>
 
+#include <folly/Memory.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/json.h>
-#include <folly/Memory.h>
 
-#include "mcrouter/lib/config/RouteHandleFactory.h"
-#include "mcrouter/McrouterInstance.h"
-#include "mcrouter/options.h"
+#include "mcrouter/CarbonRouterInstance.h"
 #include "mcrouter/PoolFactory.h"
-#include "mcrouter/proxy.h"
+#include "mcrouter/Proxy.h"
+#include "mcrouter/lib/config/RouteHandleFactory.h"
+#include "mcrouter/lib/network/gen/MemcacheRouterInfo.h"
+#include "mcrouter/options.h"
 #include "mcrouter/routes/McRouteHandleProvider.h"
-#include "mcrouter/test/cpp_unit_tests/mcrouter_cpp_tests.h"
+#include "mcrouter/routes/McrouterRouteHandle.h"
 
 using namespace facebook::memcache;
 using namespace facebook::memcache::mcrouter;
 
 namespace {
 
+const char* const kMemcacheConfig = "mcrouter/test/test_ascii.json";
+
 const char* const kAsynclogRoute =
- R"({
+    R"({
   "type": "AsynclogRoute",
   "name": "test",
   "target": "NullRoute"
  })";
 
 const char* const kConstShard =
- R"({
+    R"({
   "type": "HashRoute",
   "children": "ErrorRoute",
   "hash_func": "ConstShard"
  })";
 
 const char* const kInvalidHashFunc =
- R"({
+    R"({
   "type": "HashRoute",
   "children": "ErrorRoute",
   "hash_func": "InvalidHashFunc"
  })";
 
 const char* const kWarmUp =
- R"({
+    R"({
    "type": "WarmUpRoute",
    "cold": "ErrorRoute",
    "warm": "NullRoute"
  })";
 
 const char* const kPoolRoute =
- R"({
+    R"({
    "type": "PoolRoute",
    "pool": { "name": "mock", "servers": [ ] },
    "hash": { "hash_func": "Crc32" }
@@ -67,24 +69,25 @@ const char* const kPoolRoute =
 struct TestSetup {
  public:
   TestSetup()
-    : router_(McrouterInstance::init("test_get_route", getOpts())),
-      poolFactory_(folly::dynamic::object(),
-                   router_->configApi()),
-      rhProvider_(*router_->getProxy(0), poolFactory_),
-      rhFactory_(rhProvider_, 0) {
-  }
+      : router_(CarbonRouterInstance<McrouterRouterInfo>::init(
+            "test_get_route",
+            getOpts())),
+        poolFactory_(folly::dynamic::object(), router_->configApi()),
+        rhProvider_(*router_->getProxy(0), poolFactory_),
+        rhFactory_(rhProvider_, 0) {}
 
-  McRouteHandleProvider& provider() {
+  McRouteHandleProvider<MemcacheRouterInfo>& provider() {
     return rhProvider_;
   }
 
   McrouterRouteHandlePtr getRoute(const char* jsonStr) {
     return rhFactory_.create(parseJsonString(jsonStr));
   }
+
  private:
-  McrouterInstance* router_;
+  CarbonRouterInstance<McrouterRouterInfo>* router_;
   PoolFactory poolFactory_;
-  McRouteHandleProvider rhProvider_;
+  McRouteHandleProvider<MemcacheRouterInfo> rhProvider_;
   RouteHandleFactory<McrouterRouteHandleIf> rhFactory_;
 
   static McrouterOptions getOpts() {
@@ -94,7 +97,7 @@ struct TestSetup {
   }
 };
 
-}  // anonymous
+} // anonymous
 
 TEST(McRouteHandleProviderTest, asynclog_route) {
   TestSetup setup;

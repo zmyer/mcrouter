@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -11,44 +11,23 @@
 
 #include <memory>
 
-#include "mcrouter/lib/fbi/cpp/TypeList.h"
-#include "mcrouter/lib/McOperation.h"
-#include "mcrouter/lib/McReply.h"
-#include "mcrouter/lib/McRequest.h"
-#include "mcrouter/lib/McRequestList.h"
-#include "mcrouter/lib/network/gen-cpp2/mc_caret_protocol_types.h"
-#include "mcrouter/lib/network/TypedThriftMessage.h"
-#include "mcrouter/lib/RouteHandleIf.h"
+#include "mcrouter/lib/Operation.h"
+#include "mcrouter/lib/network/CarbonMessageList.h"
+#include "mcrouter/lib/network/gen/Memcache.h"
+#include "mcrouter/lib/network/gen/MemcacheRouterInfo.h"
 
-namespace facebook { namespace memcache { namespace mcrouter {
+namespace facebook {
+namespace memcache {
+namespace mcrouter {
 
-class McrouterRouteHandleIf;
+template <class Route>
+using McrouterRouteHandle = MemcacheRouteHandle<Route>;
 
-using AllRequestList = ConcatenateListsT<RequestList, ThriftRequestList>;
-
-template <typename Route>
-class McrouterRouteHandle :
-      public RouteHandle<Route,
-                         McrouterRouteHandleIf,
-                         AllRequestList> {
- public:
-  template<typename... Args>
-  explicit McrouterRouteHandle(Args&&... args)
-    : RouteHandle<Route,
-                  McrouterRouteHandleIf,
-                  AllRequestList>(
-                    std::forward<Args>(args)...) {
-  }
-};
-
-class McrouterRouteHandleIf :
-      public RouteHandleIf<McrouterRouteHandleIf,
-                           AllRequestList> {
- public:
-  template <class Route>
-  using Impl = McrouterRouteHandle<Route>;
-};
+using McrouterRouteHandleIf = MemcacheRouteHandleIf;
 
 typedef std::shared_ptr<McrouterRouteHandleIf> McrouterRouteHandlePtr;
 
-}}}  // facebook::memcache::mcrouter
+using McrouterRouterInfo = MemcacheRouterInfo;
+}
+}
+} // facebook::memcache::mcrouter

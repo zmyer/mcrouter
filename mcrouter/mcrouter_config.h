@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -25,7 +25,11 @@ static_assert(false, "mcrouter: invalid build");
 #include <utility>
 
 #include <folly/Range.h>
+#include <folly/experimental/observer/Observer.h>
 #include <folly/io/async/EventBase.h>
+
+#include "mcrouter/lib/Operation.h"
+#include "mcrouter/lib/carbon/NoopAdditionalLogger.h"
 
 #define MCROUTER_RUNTIME_VARS_DEFAULT ""
 #define MCROUTER_STATS_ROOT_DEFAULT "/var/mcrouter/stats"
@@ -35,48 +39,46 @@ namespace folly {
 struct dynamic;
 } // folly
 
-namespace facebook { namespace memcache {
+namespace facebook {
+namespace memcache {
 
 class McrouterOptions;
+struct MemcacheRouterInfo;
 
-using LogPostprocessCallbackFunc =
-  std::function<
-    void(
-      folly::StringPiece, // Key requested
-      uint64_t flags, // Reply flags
-      folly::StringPiece, // The value in the reply
-      const char* const, // Name of operation (e.g. 'get')
-      const folly::StringPiece)>; // User ip
+using LogPostprocessCallbackFunc = std::function<void(
+    folly::StringPiece, // Key requested
+    uint64_t flags, // Reply flags
+    folly::StringPiece, // The value in the reply
+    const char* const, // Name of operation (e.g. 'get')
+    const folly::StringPiece)>; // User ip
 
 template <class T>
 inline LogPostprocessCallbackFunc getLogPostprocessFunc() {
-    return nullptr;
+  return nullptr;
 }
 
 namespace mcrouter {
 
-class ConfigApi;
+template <class RouteHandleIf>
 class ExtraRouteHandleProviderIf;
-class McrouterInstance;
+
+class CarbonRouterInstanceBase;
+class ConfigApi;
 class McrouterLogger;
 class McrouterStandaloneOptions;
 struct FailoverContext;
-struct proxy_t;
+class ProxyBase;
 struct RequestLoggerContext;
-struct ShadowValidationData;
 struct TkoLog;
 
 struct ProxyStatsContainer {
-  explicit ProxyStatsContainer(proxy_t&) {}
+  explicit ProxyStatsContainer(ProxyBase&) {}
 };
 
-struct AdditionalProxyRequestLogger {
-  explicit AdditionalProxyRequestLogger(proxy_t*) {}
-  /**
-   * Called once a reply is received to record a stats sample if required.
-   */
-  void log(const RequestLoggerContext&) {
-  }
+class AdditionalProxyRequestLogger : public carbon::NoopAdditionalLogger {
+ public:
+  explicit AdditionalProxyRequestLogger(ProxyBase* proxy)
+      : NoopAdditionalLogger(proxy) {}
 };
 
 /**
@@ -84,7 +86,8 @@ struct AdditionalProxyRequestLogger {
  */
 inline int64_t nowUs() {
   return std::chrono::duration_cast<std::chrono::microseconds>(
-    std::chrono::steady_clock::now().time_since_epoch()).count();
+             std::chrono::steady_clock::now().time_since_epoch())
+      .count();
 }
 
 /**
@@ -110,13 +113,15 @@ std::unique_ptr<ConfigApi> createConfigApi(const McrouterOptions& opts);
 
 std::string performOptionSubstitution(std::string str);
 
-inline void standaloneInit(const McrouterOptions& opts,
-                           const McrouterStandaloneOptions& standaloneOpts) {
-}
+inline void standaloneInit(
+    const McrouterOptions& opts,
+    const McrouterStandaloneOptions& standaloneOpts) {}
 
-std::unique_ptr<ExtraRouteHandleProviderIf> createExtraRouteHandleProvider();
+std::unique_ptr<ExtraRouteHandleProviderIf<MemcacheRouterInfo>>
+createExtraRouteHandleProvider();
 
-std::unique_ptr<McrouterLogger> createMcrouterLogger(McrouterInstance& router);
+std::unique_ptr<McrouterLogger> createMcrouterLogger(
+    CarbonRouterInstanceBase& router);
 
 /**
  * @throws logic_error on invalid options
@@ -129,19 +134,16 @@ McrouterOptions defaultTestOptions();
 
 std::vector<std::string> defaultTestCommandLineArgs();
 
-void logTkoEvent(proxy_t& proxy, const TkoLog& tkoLog);
+void logTkoEvent(ProxyBase& proxy, const TkoLog& tkoLog);
 
-void logFailover(proxy_t& proxy, const FailoverContext& failoverContext);
-
-void logShadowValidationError(proxy_t& proxy,
-                              const ShadowValidationData& valData);
+void logFailover(ProxyBase& proxy, const FailoverContext& failoverContext);
 
 void initFailureLogger();
 
 /**
  * Initializes compression dictionaries for the given mcrouter instance
  */
-void initCompression(McrouterInstance& router);
+bool initCompression(CarbonRouterInstanceBase& router);
 
 void scheduleSingletonCleanup();
 
@@ -156,7 +158,15 @@ void insertCustomStartupOpts(folly::dynamic& options);
 std::string getBinPath(folly::StringPiece name);
 
 #ifndef MCROUTER_PACKAGE_STRING
-  #define MCROUTER_PACKAGE_STRING "1.0.0 mcrouter"
+#define MCROUTER_PACKAGE_STRING "1.0.0 mcrouter"
 #endif
 
-}}} // facebook::memcache::mcrouter
+inline folly::Optional<folly::observer::Observer<std::string>>
+startObservingRuntimeVarsFileCustom(
+    folly::StringPiece file,
+    std::function<void(std::string)> onUpdate) {
+  return folly::none;
+}
+}
+}
+} // facebook::memcache::mcrouter

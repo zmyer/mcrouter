@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -9,18 +9,16 @@
  */
 #pragma once
 
+#include "mcrouter/CarbonRouterClient.h"
 #include "mcrouter/config.h"
-#include "mcrouter/lib/McRequest.h"
 #include "mcrouter/lib/network/AsyncMcServer.h"
 #include "mcrouter/lib/network/AsyncMcServerWorker.h"
-#include "mcrouter/lib/network/gen-cpp2/mc_caret_protocol_types.h"
 #include "mcrouter/lib/network/McServerRequestContext.h"
-#include "mcrouter/lib/network/ThriftMessageList.h"
-#include "mcrouter/lib/network/ThriftMsgDispatcher.h"
-#include "mcrouter/lib/network/TypedThriftMessage.h"
-#include "mcrouter/McrouterClient.h"
+#include "mcrouter/lib/network/gen/Memcache.h"
 
-namespace facebook { namespace memcache { namespace mcrouter {
+namespace facebook {
+namespace memcache {
+namespace mcrouter {
 
 template <class Request>
 struct ServerRequestContext {
@@ -31,67 +29,45 @@ struct ServerRequestContext {
       : ctx(std::move(ctx_)), req(std::move(req_)) {}
 };
 
-class ServerOnRequest : public ThriftMsgDispatcher<TRequestList,
-                                                   ServerOnRequest,
-                                                   McServerRequestContext&&> {
+template <class RouterInfo>
+class ServerOnRequest {
  public:
   template <class Request>
-  using ReplyFunction = void (*)(McServerRequestContext&& ctx,
-                                 ReplyT<Request>&& reply);
+  using ReplyFunction =
+      void (*)(McServerRequestContext&& ctx, ReplyT<Request>&& reply);
 
-  ServerOnRequest(McrouterClient& client, bool retainSourceIp)
-    : client_(client),
-      retainSourceIp_(retainSourceIp) {}
+  ServerOnRequest(CarbonRouterClient<RouterInfo>& client, bool retainSourceIp)
+      : client_(client), retainSourceIp_(retainSourceIp) {}
 
-  void onRequest(McServerRequestContext&& ctx,
-                 McRequestWithMcOp<mc_op_version>&& req) {
-    McServerRequestContext::reply(std::move(ctx),
-                                  McReply(mc_res_ok, MCROUTER_PACKAGE_STRING));
+  template <class Request>
+  void onRequest(McServerRequestContext&& ctx, Request&& req) {
+    using Reply = ReplyT<Request>;
+    send(std::move(ctx), std::move(req), &McServerRequestContext::reply<Reply>);
   }
 
-  template <int op>
-  void onRequest(McServerRequestContext&& ctx, McRequestWithMcOp<op>&& req) {
-    send(std::move(ctx),
-         std::move(req),
-         &McServerRequestContext::reply);
-  }
-
-  template <class ThriftType>
-  void onRequest(McServerRequestContext&& ctx,
-                 TypedThriftRequest<ThriftType>&& req) {
-    using Reply = ReplyT<TypedThriftRequest<ThriftType>>;
-    send(std::move(ctx),
-         std::move(req),
-         &McServerRequestContext::reply<Reply>);
-  }
-
-  void onRequest(McServerRequestContext&& ctx,
-                 TypedThriftRequest<cpp2::McVersionRequest>&&) {
-    TypedThriftReply<cpp2::McVersionReply> reply(mc_res_ok);
-    reply.setValue(MCROUTER_PACKAGE_STRING);
+  void onRequest(McServerRequestContext&& ctx, McVersionRequest&&) {
+    McVersionReply reply(mc_res_ok);
+    reply.value() =
+        folly::IOBuf(folly::IOBuf::COPY_BUFFER, MCROUTER_PACKAGE_STRING);
 
     McServerRequestContext::reply(std::move(ctx), std::move(reply));
   }
 
-  void onRequest(McServerRequestContext&& ctx,
-                 TypedThriftRequest<cpp2::McQuitRequest>&&) {
-    using Reply = TypedThriftReply<cpp2::McQuitReply>;
-    McServerRequestContext::reply(std::move(ctx), Reply(mc_res_ok));
+  void onRequest(McServerRequestContext&& ctx, McQuitRequest&&) {
+    McServerRequestContext::reply(std::move(ctx), McQuitReply(mc_res_ok));
   }
 
-  void onRequest(McServerRequestContext&& ctx,
-                 TypedThriftRequest<cpp2::McShutdownRequest>&&) {
-    using Reply = TypedThriftReply<cpp2::McShutdownReply>;
-    McServerRequestContext::reply(std::move(ctx), Reply(mc_res_ok));
+  void onRequest(McServerRequestContext&& ctx, McShutdownRequest&&) {
+    McServerRequestContext::reply(std::move(ctx), McShutdownReply(mc_res_ok));
   }
 
   template <class Request>
-  void send(McServerRequestContext&& ctx,
-            Request&& req,
-            ReplyFunction<Request> replyFn) {
+  void send(
+      McServerRequestContext&& ctx,
+      Request&& req,
+      ReplyFunction<Request> replyFn) {
     auto rctx = folly::make_unique<ServerRequestContext<Request>>(
-        std::move(ctx),
-        std::move(req));
+        std::move(ctx), std::move(req));
     auto& reqRef = rctx->req;
     auto& sessionRef = rctx->ctx.session();
 
@@ -109,8 +85,9 @@ class ServerOnRequest : public ThriftMsgDispatcher<TRequestList,
   }
 
  private:
-  McrouterClient& client_;
+  CarbonRouterClient<RouterInfo>& client_;
   bool retainSourceIp_{false};
 };
-
-}}} // facebook::memcache::mcrouter
+} // mcrouter
+} // memcache
+} // facebook

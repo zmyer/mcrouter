@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -15,16 +15,21 @@
 
 #include <folly/io/async/EventBase.h>
 
-#include "mcrouter/proxy.h"
+#include "mcrouter/Proxy.h"
 
-namespace facebook { namespace memcache { namespace mcrouter {
+namespace facebook {
+namespace memcache {
+namespace mcrouter {
 
-class McrouterInstance;
-struct proxy_t;
+class CarbonRouterInstanceBase;
 
+template <class RouterInfo>
+class Proxy;
+
+template <class RouterInfo>
 class ProxyThread {
  public:
-  ProxyThread(McrouterInstance& router, size_t id);
+  ProxyThread(CarbonRouterInstanceBase& router, size_t id);
 
   /**
    * Stops the underlying proxy thread and joins it.
@@ -41,24 +46,27 @@ class ProxyThread {
    */
   void spawn();
 
-  proxy_t& proxy() { return *proxy_; }
-  folly::EventBase& eventBase() { return evb_; }
+  Proxy<RouterInfo>& proxy() {
+    return proxyRef_;
+  }
+  folly::EventBase& eventBase() {
+    return evbRef_;
+  }
 
  private:
-  folly::EventBase evb_;
-  proxy_t::Pointer proxy_;
+  std::unique_ptr<folly::EventBase> evb_;
+  typename Proxy<RouterInfo>::Pointer proxy_;
+  folly::EventBase& evbRef_;
+  Proxy<RouterInfo>& proxyRef_;
   std::thread thread_;
 
-  enum class State {
-    RUNNING,
-    STOPPING,
-    STOPPED
-  };
-  std::atomic<State> state_{State::STOPPED};
-
   void stopAwriterThreads();
-  void proxyThreadRun();
+  static void proxyThreadRun(
+      std::unique_ptr<folly::EventBase> evb,
+      typename Proxy<RouterInfo>::Pointer proxy);
 };
+}
+}
+} // facebook::memcache::mcrouter
 
-
-}}}  // facebook::memcache::mcrouter
+#include "ProxyThread-inl.h"

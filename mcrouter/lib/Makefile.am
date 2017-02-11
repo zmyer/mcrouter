@@ -1,21 +1,6 @@
-SUBDIRS = . allocator config cycles fbi mc network test
+SUBDIRS = . config cycles fbi network test
 
 noinst_LIBRARIES = libmcrouter.a
-
-BUILT_SOURCES = \
-  network/gen-cpp2/mc_caret_protocol_types.cpp \
-  network/gen-cpp2/mc_caret_protocol_types.h \
-  network/gen-cpp2/mc_caret_protocol_types_custom_protocol.h
-
-# The `sed` hack below is necessary until the Thrift compiler is modified
-# to not generate service-related includes when linking only against
-# libthriftprotocol.
-network/gen-cpp2/mc_caret_protocol_types.cpp: network/gen-cpp2/mc_caret_protocol_types.h
-network/gen-cpp2/mc_caret_protocol_types_custom_protocol.h: network/gen-cpp2/mc_caret_protocol_types.h
-network/gen-cpp2/mc_caret_protocol_types.h: network/mc_caret_protocol.thrift
-	PYTHONPATH=$(THRIFT2_COMP_DIR)/..:$$PYTHONPATH $(THRIFT) --gen cpp2 -o network/ $<
-	find network/gen-cpp2/ -name 'mc_caret_protocol*' -type f | xargs sed -i 's/^.*GeneratedCodeHelper\.h.*$$//g'
-	find network/gen-cpp2/ -name 'mc_caret_protocol*' -type f | xargs sed -i 's/^.*Cpp2ConnContext\.h.*$$//g'
 
 libmcrouter_a_SOURCES = \
   CacheClientStats.h \
@@ -29,38 +14,54 @@ libmcrouter_a_SOURCES = \
   FailoverErrorsSettings.h \
   IOBufUtil.cpp \
   IOBufUtil.h \
-	IovecCursor-inl.h \
-	IovecCursor.cpp \
-	IovecCursor.h \
-  Keys.cpp \
-  Keys.h \
+  IovecCursor-inl.h \
+  IovecCursor.cpp \
+  IovecCursor.h \
+  Lz4CompressionCodec.cpp \
+  Lz4CompressionCodec.h \
   Lz4Immutable.cpp \
   Lz4Immutable.h \
-  MessageStorage.h \
+  Lz4ImmutableCompressionCodec.cpp \
+  Lz4ImmutableCompressionCodec.h \
   MessageQueue.cpp \
   MessageQueue.h \
-  McMsgRef.h \
   McOpList.h \
   McOperation.h \
   McOperationTraits.h \
-  McReply-inl.h \
-  McReply.cpp \
-  McReply.h \
-  McRequest.cpp \
-  McRequest.h \
   McRequestList.h \
   McResUtil.h \
   Operation.h \
   OperationTraits.h \
+  Ref.h \
   Reply.h \
-  RouteHandleIf.h \
   RouteHandleTraverser.h \
   StatsReply.cpp \
   StatsReply.h \
   WeightedCh3HashFunc.cpp \
   WeightedCh3HashFunc.h \
-  allocator/JemallocNodumpAllocator.h \
-  allocator/JemallocNodumpAllocator.cpp \
+  ZstdCompressionCodec.cpp \
+  ZstdCompressionCodec.h \
+  carbon/Fields.h \
+  carbon/CarbonQueueAppender.cpp \
+  carbon/CarbonQueueAppender.h \
+  carbon/CarbonProtocolCommon.h \
+  carbon/CarbonProtocolReader.cpp \
+  carbon/CarbonProtocolReader.h \
+  carbon/CarbonProtocolWriter.h \
+  carbon/CommonSerializationTraits.h \
+  carbon/Keys-inl.h \
+  carbon/Keys.h \
+  carbon/NoopAdditionalLogger.h \
+  carbon/ReplyCommon.h \
+  carbon/RequestCommon.h \
+  carbon/RequestReplyUtil.h \
+  carbon/Result.h \
+  carbon/SerializationTraits.h \
+  carbon/Stats.h \
+  carbon/TypeList-inl.h \
+  carbon/TypeList.h \
+  carbon/Util.h \
+  carbon/Variant.h \
   config/ConfigPreprocessor.cpp \
   config/ConfigPreprocessor.h \
   config/ImportResolverIf.h \
@@ -79,16 +80,14 @@ libmcrouter_a_SOURCES = \
   cycles/ExtractorThread.cpp \
   cycles/ExtractorThread.h \
   cycles/Interval.h \
-	debug/ConnectionFifo.cpp \
-	debug/ConnectionFifo.h \
-	debug/ConnectionFifoProtocol.cpp \
-	debug/ConnectionFifoProtocol.h \
+  debug/ConnectionFifo.cpp \
+  debug/ConnectionFifo.h \
+  debug/ConnectionFifoProtocol.cpp \
+  debug/ConnectionFifoProtocol.h \
   debug/Fifo.cpp \
   debug/Fifo.h \
   debug/FifoManager.cpp \
   debug/FifoManager.h \
-  fbi/asox_timer.c \
-  fbi/asox_timer.h \
   fbi/counting_sem.c \
   fbi/counting_sem.h \
   fbi/cpp/FuncGenerator.h \
@@ -96,6 +95,7 @@ libmcrouter_a_SOURCES = \
   fbi/cpp/LogFailure.h \
   fbi/cpp/Trie-inl.h \
   fbi/cpp/Trie.h \
+  fbi/cpp/TypeList-inl.h \
   fbi/cpp/TypeList.h \
   fbi/cpp/globals.cpp \
   fbi/cpp/globals.h \
@@ -118,21 +118,12 @@ libmcrouter_a_SOURCES = \
   fbi/sfrlock.h \
   fbi/time.h \
   fbi/util.h \
-  mc/ascii_client.c \
-  mc/ascii_client.h \
-  mc/ascii_response.c \
-  mc/ascii_response.h \
   mc/msg.c \
   mc/msg.h \
-  mc/parser.c \
-  mc/parser.h \
   mc/protocol.h \
   mc/umbrella.c \
   mc/umbrella.h \
   mc/umbrella_conv.h \
-  mc/umbrella_protocol.c \
-  mc/umbrella_protocol.h \
-  mc/util.h \
   network/AccessPoint.cpp \
   network/AccessPoint.h \
   network/AsciiSerialized-inl.h \
@@ -148,17 +139,28 @@ libmcrouter_a_SOURCES = \
   network/AsyncMcServerWorker.cpp \
   network/AsyncMcServerWorker.h \
   network/AsyncMcServerWorkerOptions.h \
-  network/CaretReplyConverterImpl.cpp \
-  network/CaretReplyConverterImpl.h \
-  network/CaretSerializedMessageImpl-inl.h \
-  network/CaretSerializedMessageImpl.h \
+  network/CarbonMessageDispatcher.h \
+  network/CarbonMessageList.h \
+  network/CarbonMessageTraits.h \
+  network/CarbonRequestHandler.h \
+  network/CaretHeader.h \
+  network/CaretSerializedMessage-inl.h \
+  network/CaretSerializedMessage.h \
   network/ClientMcParser-inl.h \
   network/ClientMcParser.h \
+  network/CongestionController.cpp \
+  network/CongestionController.h \
   network/ConnectionOptions.h \
   network/ConnectionTracker.cpp \
   network/ConnectionTracker.h \
-  network/gen-cpp2/mc_caret_protocol_types.cpp \
-  network/gen-cpp2/mc_caret_protocol_types.h \
+  network/CpuController.cpp \
+  network/CpuController.h \
+  network/gen/CommonMessages-inl.h \
+  network/gen/CommonMessages.cpp \
+  network/gen/CommonMessages.h \
+  network/gen/MemcacheMessages-inl.h \
+  network/gen/MemcacheMessages.cpp \
+  network/gen/MemcacheMessages.h \
   network/McAsciiParser-gen.cpp \
   network/McAsciiParser-inl.h \
   network/McAsciiParser.cpp \
@@ -168,10 +170,6 @@ libmcrouter_a_SOURCES = \
   network/McClientRequestContext.h \
   network/McParser.cpp \
   network/McParser.h \
-  network/McQueueAppender.cpp \
-  network/McQueueAppender.h \
-  network/McRequestToTypedConverter.cpp \
-  network/McRequestToTypedConverter.h \
   network/McSerializedRequest.cpp \
   network/McSerializedRequest.h \
   network/McServerRequestContext-inl.h \
@@ -179,6 +177,9 @@ libmcrouter_a_SOURCES = \
   network/McServerRequestContext.h \
   network/McServerSession.cpp \
   network/McServerSession.h \
+  network/MemcacheMessageHelpers.h \
+  network/MemoryController.cpp \
+  network/MemoryController.h \
   network/MockMcClientTransport.cpp \
   network/MockMcClientTransport.h \
   network/MultiOpParent.cpp \
@@ -187,8 +188,6 @@ libmcrouter_a_SOURCES = \
   network/ServerMcParser.h \
   network/ThreadLocalSSLContextProvider.cpp \
   network/ThreadLocalSSLContextProvider.h \
-  network/ThriftMessageList.h \
-  network/ThriftMsgDispatcher.h \
   network/UmbrellaProtocol.cpp \
   network/UmbrellaProtocol.h \
   network/UniqueIntrusiveList.h \

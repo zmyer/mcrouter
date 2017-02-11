@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -14,7 +14,8 @@
 
 #include "mcrouter/lib/fbi/cpp/util.h"
 
-namespace facebook { namespace memcache {
+namespace facebook {
+namespace memcache {
 
 namespace {
 
@@ -52,6 +53,15 @@ bool parseSsl(folly::StringPiece s) {
   throw std::runtime_error("Invalid encryption");
 }
 
+bool parseCompressed(folly::StringPiece s) {
+  if (s == "compressed") {
+    return true;
+  } else if (s == "notcompressed") {
+    return false;
+  }
+  throw std::runtime_error("Invalid compression config");
+}
+
 mc_protocol_t parseProtocol(folly::StringPiece str) {
   if (str == "ascii") {
     return mc_ascii_protocol;
@@ -63,14 +73,18 @@ mc_protocol_t parseProtocol(folly::StringPiece str) {
   throw std::runtime_error("Invalid protocol");
 }
 
-}  // anonymous
+} // anonymous
 
-AccessPoint::AccessPoint(folly::StringPiece host, uint16_t port,
-                         mc_protocol_t protocol, bool useSsl)
+AccessPoint::AccessPoint(
+    folly::StringPiece host,
+    uint16_t port,
+    mc_protocol_t protocol,
+    bool useSsl,
+    bool compressed)
     : port_(port),
       protocol_(protocol),
-      useSsl_(useSsl) {
-
+      useSsl_(useSsl),
+      compressed_(compressed) {
   try {
     folly::IPAddress ip(host);
     host_ = ip.toFullyQualified();
@@ -82,11 +96,12 @@ AccessPoint::AccessPoint(folly::StringPiece host, uint16_t port,
   }
 }
 
-std::shared_ptr<AccessPoint>
-AccessPoint::create(folly::StringPiece apString,
-                    mc_protocol_t defaultProtocol,
-                    bool defaultUseSsl,
-                    uint16_t portOverride) {
+std::shared_ptr<AccessPoint> AccessPoint::create(
+    folly::StringPiece apString,
+    mc_protocol_t defaultProtocol,
+    bool defaultUseSsl,
+    uint16_t portOverride,
+    bool defaultCompressed) {
   if (apString.empty()) {
     return nullptr;
   }
@@ -117,17 +132,22 @@ AccessPoint::create(folly::StringPiece apString,
   }
 
   try {
-    folly::StringPiece port, protocol, encr;
-    parseParts(apString, port, protocol, encr);
+    folly::StringPiece port, protocol, encr, comp;
+    parseParts(apString, port, protocol, encr, comp);
 
     return std::make_shared<AccessPoint>(
-      host,
-      portOverride != 0 ? portOverride : folly::to<uint16_t>(port),
-      protocol.empty() ? defaultProtocol : parseProtocol(protocol),
-      encr.empty() ? defaultUseSsl : parseSsl(encr));
+        host,
+        portOverride != 0 ? portOverride : folly::to<uint16_t>(port),
+        protocol.empty() ? defaultProtocol : parseProtocol(protocol),
+        encr.empty() ? defaultUseSsl : parseSsl(encr),
+        comp.empty() ? defaultCompressed : parseCompressed(comp));
   } catch (const std::exception&) {
     return nullptr;
   }
+}
+
+void AccessPoint::disableCompression() {
+  compressed_ = false;
 }
 
 std::string AccessPoint::toHostPortString() const {
@@ -140,13 +160,28 @@ std::string AccessPoint::toHostPortString() const {
 std::string AccessPoint::toString() const {
   assert(protocol_ != mc_unknown_protocol);
   if (isV6_) {
-    return folly::to<std::string>("[", host_, "]:", port_, ":",
-                                  mc_protocol_to_string(protocol_),
-                                  ":", useSsl_ ? "ssl" : "plain");
+    return folly::to<std::string>(
+        "[",
+        host_,
+        "]:",
+        port_,
+        ":",
+        mc_protocol_to_string(protocol_),
+        ":",
+        useSsl_ ? "ssl" : "plain",
+        ":",
+        compressed_ ? "compressed" : "notcompressed");
   }
-  return folly::to<std::string>(host_, ":", port_, ":",
-                                mc_protocol_to_string(protocol_),
-                                ":", useSsl_ ? "ssl" : "plain");
+  return folly::to<std::string>(
+      host_,
+      ":",
+      port_,
+      ":",
+      mc_protocol_to_string(protocol_),
+      ":",
+      useSsl_ ? "ssl" : "plain",
+      ":",
+      compressed_ ? "compressed" : "notcompressed");
 }
-
-}}  // facebook::memcache
+}
+} // facebook::memcache

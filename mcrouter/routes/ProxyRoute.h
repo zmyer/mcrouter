@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -13,37 +13,44 @@
 #include <string>
 #include <vector>
 
-#include "mcrouter/lib/mc/msg.h"
-#include "mcrouter/lib/McOperation.h"
-#include "mcrouter/lib/McRequestList.h"
-#include "mcrouter/lib/network/gen-cpp2/mc_caret_protocol_types.h"
-#include "mcrouter/lib/network/TypedThriftMessage.h"
-#include "mcrouter/lib/Reply.h"
-#include "mcrouter/lib/RouteHandleTraverser.h"
-#include "mcrouter/lib/routes/AllSyncRoute.h"
 #include "mcrouter/McrouterFiberContext.h"
 #include "mcrouter/ProxyDestination.h"
 #include "mcrouter/ProxyDestinationMap.h"
+#include "mcrouter/lib/McOperation.h"
+#include "mcrouter/lib/Reply.h"
+#include "mcrouter/lib/RouteHandleTraverser.h"
+#include "mcrouter/lib/mc/msg.h"
+#include "mcrouter/lib/network/gen/Memcache.h"
+#include "mcrouter/lib/routes/AllSyncRoute.h"
 #include "mcrouter/routes/BigValueRouteIf.h"
-#include "mcrouter/routes/McrouterRouteHandle.h"
 #include "mcrouter/routes/RouteSelectorMap.h"
 
-namespace facebook { namespace memcache { namespace mcrouter {
+namespace facebook {
+namespace memcache {
+namespace mcrouter {
 
-struct proxy_t;
+template <class RouterInfo>
+class Proxy;
 
 /**
  * This is the top-most level of Mcrouter's RouteHandle tree.
  */
+template <class RouterInfo>
 class ProxyRoute {
  public:
-  static std::string routeName() { return "proxy"; }
+  static std::string routeName() {
+    return "proxy";
+  }
 
-  ProxyRoute(proxy_t* proxy, const RouteSelectorMap& routeSelectors);
+  ProxyRoute(
+      Proxy<RouterInfo>* proxy,
+      const RouteSelectorMap<typename RouterInfo::RouteHandleIf>&
+          routeSelectors);
 
   template <class Request>
-  void traverse(const Request& req,
-                const RouteHandleTraverser<McrouterRouteHandleIf>& t) const {
+  void traverse(
+      const Request& req,
+      const RouteHandleTraverser<typename RouterInfo::RouteHandleIf>& t) const {
     t(*root_, req);
   }
 
@@ -52,22 +59,22 @@ class ProxyRoute {
     return root_->route(req);
   }
 
-  McReply route(const McRequestWithMcOp<mc_op_flushall>& req) const {
+  McFlushAllReply route(const McFlushAllRequest& req) const {
     // route to all destinations in the config.
-    return AllSyncRoute<McrouterRouteHandleIf>(getAllDestinations()).route(req);
-  }
-
-  TypedThriftReply<cpp2::McFlushAllReply> route(
-      const TypedThriftRequest<cpp2::McFlushAllRequest>& req) const {
-    // route to all destinations in the config.
-    return AllSyncRoute<McrouterRouteHandleIf>(getAllDestinations()).route(req);
+    return AllSyncRoute<typename RouterInfo::RouteHandleIf>(
+               getAllDestinations())
+        .route(req);
   }
 
  private:
-  proxy_t* proxy_;
-  McrouterRouteHandlePtr root_;
+  Proxy<RouterInfo>* proxy_;
+  std::shared_ptr<typename RouterInfo::RouteHandleIf> root_;
 
-  std::vector<McrouterRouteHandlePtr> getAllDestinations() const;
+  std::vector<std::shared_ptr<typename RouterInfo::RouteHandleIf>>
+  getAllDestinations() const;
 };
+}
+}
+} // facebook::memcache::mcrouter
 
-}}}  // facebook::memcache::mcrouter
+#include "ProxyRoute-inl.h"

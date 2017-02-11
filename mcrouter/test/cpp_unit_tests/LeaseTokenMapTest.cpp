@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -9,14 +9,11 @@
  */
 #include <chrono>
 #include <thread>
-#include <vector>
 
-#include <glog/logging.h>
 #include <gtest/gtest.h>
 
-#include <folly/io/async/EventBase.h>
-#include <folly/io/async/ScopedEventBaseThread.h>
 #include <folly/Optional.h>
+#include <folly/io/async/EventBaseThread.h>
 
 #include "mcrouter/LeaseTokenMap.h"
 
@@ -24,16 +21,21 @@ using namespace facebook::memcache::mcrouter;
 
 namespace {
 
-void assertQueryTrue(LeaseTokenMap& map, std::string routeName,
-                     uint64_t specialToken, LeaseTokenMap::Item expectedItem) {
+void assertQueryTrue(
+    LeaseTokenMap& map,
+    std::string routeName,
+    uint64_t specialToken,
+    LeaseTokenMap::Item expectedItem) {
   auto item = map.query(routeName, specialToken);
   EXPECT_TRUE(item.hasValue());
   EXPECT_EQ(item->originalToken, expectedItem.originalToken);
   EXPECT_EQ(item->routeHandleChildIndex, expectedItem.routeHandleChildIndex);
 }
 
-void assertQueryFalse(LeaseTokenMap& map, std::string routeName,
-                      uint64_t specialToken) {
+void assertQueryFalse(
+    LeaseTokenMap& map,
+    std::string routeName,
+    uint64_t specialToken) {
   auto item = map.query(routeName, specialToken);
   EXPECT_FALSE(item.hasValue());
 }
@@ -41,7 +43,7 @@ void assertQueryFalse(LeaseTokenMap& map, std::string routeName,
 } // anonymous namespace
 
 TEST(LeaseTokenMap, sanity) {
-  folly::ScopedEventBaseThread evbAuxThread;
+  folly::EventBaseThread evbAuxThread;
   LeaseTokenMap map(evbAuxThread);
 
   EXPECT_EQ(map.size(), 0);
@@ -67,7 +69,7 @@ TEST(LeaseTokenMap, magicConflict) {
   // by memcached) that contains our "magic", LeaseTokenMap should handle it
   // gracefully.
 
-  folly::ScopedEventBaseThread evbAuxThread;
+  folly::EventBaseThread evbAuxThread;
   LeaseTokenMap map(evbAuxThread);
 
   EXPECT_EQ(map.size(), 0);
@@ -85,7 +87,7 @@ TEST(LeaseTokenMap, nestedRoutes) {
   // Simulates the following routing:
   // proxyRoute -> failover:route02 -> failover:route01 -> destinationRoute
 
-  folly::ScopedEventBaseThread evbAuxThread;
+  folly::EventBaseThread evbAuxThread;
   LeaseTokenMap map(evbAuxThread);
 
   // LEASE-GET
@@ -96,7 +98,7 @@ TEST(LeaseTokenMap, nestedRoutes) {
   const uint64_t specialToken1 = map.insert("route01", {memcachedToken, 1});
   // In route failover:route02, insert specialToken1 into map and return
   // specialToken2
-  const uint64_t specialToken2 = map.insert("route02", {specialToken1,  2});
+  const uint64_t specialToken2 = map.insert("route02", {specialToken1, 2});
   // The client will receice specialToken2
 
   // LEASE-SET
@@ -107,7 +109,7 @@ TEST(LeaseTokenMap, nestedRoutes) {
 
 TEST(LeaseTokenMap, shrink) {
   size_t tokenTtl = 100;
-  folly::ScopedEventBaseThread evbAuxThread;
+  folly::EventBaseThread evbAuxThread;
   LeaseTokenMap map(evbAuxThread, tokenTtl);
 
   EXPECT_EQ(map.size(), 0);
@@ -125,7 +127,7 @@ TEST(LeaseTokenMap, shrink) {
 
 TEST(LeaseTokenMap, stress) {
   size_t tokenTtl = 1000;
-  folly::ScopedEventBaseThread evbAuxThread;
+  folly::EventBaseThread evbAuxThread;
   LeaseTokenMap map(evbAuxThread, tokenTtl);
 
   EXPECT_EQ(map.size(), 0);

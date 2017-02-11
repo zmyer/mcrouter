@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -9,12 +9,13 @@
  */
 #pragma once
 
-#include <sys/resource.h>
+#include <sys/socket.h>
 
-#include "mcrouter/lib/fbi/debug.h"
 #include "mcrouter/options.h"
 
-namespace facebook { namespace memcache { namespace mcrouter {
+namespace facebook {
+namespace memcache {
+namespace mcrouter {
 
 /*
 ** Observation of mcrouter in production indicates that
@@ -25,13 +26,12 @@ namespace facebook { namespace memcache { namespace mcrouter {
 #define DEFAULT_MAX_CLIENT_OUTSTANDING_REQS \
   (uint32_t)((1024 * 1024 * 100) / OUTSTANDING_REQ_BYTES)
 
-#define DEFAULT_FDLIMIT 65535
-
 #define OPTIONS_FILE "mcrouter/standalone_options_list.h"
 #define OPTIONS_NAME McrouterStandaloneOptions
 #include "mcrouter/options-template.h"
 
 #undef OPTIONS_FILE
 #undef OPTIONS_NAME
-
-}}}  // facebook::memcache::mcrouter
+}
+}
+} // facebook::memcache::mcrouter

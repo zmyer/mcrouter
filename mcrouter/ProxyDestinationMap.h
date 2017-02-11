@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -18,16 +18,17 @@
 
 #include <folly/experimental/StringKeyedUnorderedMap.h>
 
-using asox_timer_t = void*;
+#include "mcrouter/AsyncTimer.h"
 
-namespace facebook { namespace memcache {
+namespace facebook {
+namespace memcache {
 
 struct AccessPoint;
 
 namespace mcrouter {
 
+class ProxyBase;
 class ProxyDestination;
-struct proxy_t;
 
 /**
  * Manages lifetime of ProxyDestinations. Main goal is to reuse same
@@ -45,22 +46,24 @@ struct proxy_t;
  */
 class ProxyDestinationMap {
  public:
-  explicit ProxyDestinationMap(proxy_t* proxy);
+  explicit ProxyDestinationMap(ProxyBase* proxy);
 
   /**
    * If ProxyDestination is already stored in this object - returns it;
    * otherwise, returns nullptr.
    */
   std::shared_ptr<ProxyDestination> find(
-      const AccessPoint& ap, std::chrono::milliseconds timeout) const;
+      const AccessPoint& ap,
+      std::chrono::milliseconds timeout) const;
   /**
    * If ProxyDestination is already stored in this object - returns it;
    * otherwise creates a new one.
    */
-  std::shared_ptr<ProxyDestination> emplace(std::shared_ptr<AccessPoint> ap,
-                                            std::chrono::milliseconds timeout,
-                                            uint64_t qosClass,
-                                            uint64_t qosPath);
+  std::shared_ptr<ProxyDestination> emplace(
+      std::shared_ptr<AccessPoint> ap,
+      std::chrono::milliseconds timeout,
+      uint64_t qosClass,
+      uint64_t qosPath);
 
   /**
    * Remove destination from both active and inactive lists
@@ -113,14 +116,15 @@ class ProxyDestinationMap {
  private:
   struct StateList;
 
-  proxy_t* proxy_;
+  ProxyBase* proxy_;
   folly::StringKeyedUnorderedMap<std::weak_ptr<ProxyDestination>> destinations_;
   mutable std::mutex destinationsLock_;
 
   std::unique_ptr<StateList> active_;
   std::unique_ptr<StateList> inactive_;
 
-  asox_timer_t resetTimer_;
+  uint32_t inactivityTimeout_;
+  std::unique_ptr<AsyncTimer<ProxyDestinationMap>> resetTimer_;
 
   /**
    * If ProxyDestination is already stored in this object - returns it;
@@ -128,6 +132,14 @@ class ProxyDestinationMap {
    * Note: caller must be holding destionationsLock_.
    */
   std::shared_ptr<ProxyDestination> find(const std::string& key) const;
-};
 
-}}} // facebook::memcache::mcrouter
+  /**
+   * Time callback which clears inactive connections and reschedules the timer.
+   */
+  void timerCallback();
+
+  friend class AsyncTimer<ProxyDestinationMap>;
+};
+}
+}
+} // facebook::memcache::mcrouter

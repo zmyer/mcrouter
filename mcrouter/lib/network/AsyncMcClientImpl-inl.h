@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -9,17 +9,17 @@
  */
 #include <folly/Memory.h>
 
-#include "mcrouter/lib/cycles/Cycles.h"
-#include "mcrouter/lib/McReply.h"
-#include "mcrouter/lib/McRequest.h"
 #include "mcrouter/lib/network/FBTrace.h"
+#include "mcrouter/lib/network/ReplyStatsContext.h"
 
-namespace facebook { namespace memcache {
+namespace facebook {
+namespace memcache {
 
 template <class Request>
 ReplyT<Request> AsyncMcClientImpl::sendSync(
     const Request& request,
-    std::chrono::milliseconds timeout) {
+    std::chrono::milliseconds timeout,
+    ReplyStatsContext* replyContext) {
   auto selfPtr = selfPtr_.lock();
   // shouldn't happen.
   assert(selfPtr);
@@ -45,15 +45,48 @@ ReplyT<Request> AsyncMcClientImpl::sendSync(
   sendCommon(ctx);
 
   // Wait for the reply.
-  return ctx.waitForReply(timeout);
+  auto reply = ctx.waitForReply(timeout);
+
+  if (replyContext) {
+    *replyContext = ctx.getReplyStatsContext();
+  }
+
+  // Schedule next writer loop, in case we didn't before
+  // due to max inflight requests limit.
+  scheduleNextWriterLoop();
+
+  return reply;
 }
 
 template <class Reply>
-void AsyncMcClientImpl::replyReady(Reply&& r, uint64_t reqId) {
+void AsyncMcClientImpl::replyReady(
+    Reply&& r,
+    uint64_t reqId,
+    ReplyStatsContext replyStatsContext) {
   assert(connectionState_ == ConnectionState::UP);
   DestructorGuard dg(this);
 
-  queue_.reply(reqId, std::move(r));
+  queue_.reply(reqId, std::move(r), replyStatsContext);
 }
 
-}} // facebook::memcache
+template <class Request>
+double AsyncMcClientImpl::getDropProbability() const {
+  return 0.0;
+}
+
+template <>
+inline double AsyncMcClientImpl::getDropProbability<McSetRequest>() const {
+  return parser_ ? parser_->getDropProbability() : 0.0;
+}
+
+template <>
+inline double AsyncMcClientImpl::getDropProbability<McGetRequest>() const {
+  return parser_ ? parser_->getDropProbability() : 0.0;
+}
+
+template <>
+inline double AsyncMcClientImpl::getDropProbability<McDeleteRequest>() const {
+  return parser_ ? parser_->getDropProbability() : 0.0;
+}
+}
+} // facebook::memcache

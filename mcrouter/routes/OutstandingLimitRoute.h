@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -14,48 +14,63 @@
 #include <vector>
 
 #include <folly/Conv.h>
-#include <folly/experimental/fibers/Baton.h>
 #include <folly/ScopeGuard.h>
+#include <folly/fibers/Baton.h>
 
-#include "mcrouter/lib/McOperationTraits.h"
-#include "mcrouter/lib/network/ThriftMessageTraits.h"
+#include "mcrouter/CarbonRouterInstanceBase.h"
+#include "mcrouter/McrouterFiberContext.h"
+#include "mcrouter/ProxyBase.h"
+#include "mcrouter/ProxyRequestContext.h"
 #include "mcrouter/lib/Operation.h"
 #include "mcrouter/lib/Reply.h"
 #include "mcrouter/lib/RouteHandleTraverser.h"
-#include "mcrouter/McrouterFiberContext.h"
-#include "mcrouter/McrouterInstance.h"
+#include "mcrouter/lib/carbon/RoutingGroups.h"
+#include "mcrouter/lib/config/RouteHandleBuilder.h"
 #include "mcrouter/options.h"
-#include "mcrouter/proxy.h"
-#include "mcrouter/ProxyRequestContext.h"
-#include "mcrouter/routes/McrouterRouteHandle.h"
 
-namespace facebook { namespace memcache { namespace mcrouter {
+namespace folly {
+struct dynamic;
+}
+
+namespace facebook {
+namespace memcache {
+
+template <class RouteHandleIf>
+class RouteHandleFactory;
+
+namespace mcrouter {
 
 /*
  * No more than N requests will be allowed to be concurrently processed by child
  * route. All blocked requests will be sent one request per sender id in
  * round-robin fashion to guarantee fairness.
  */
+template <class RouterInfo>
 class OutstandingLimitRoute {
+ private:
+  using RouteHandleIf = typename RouterInfo::RouteHandleIf;
+
  public:
   std::string routeName() const {
     return folly::to<std::string>("outstanding-limit|limit=", maxOutstanding_);
   }
 
   template <class Request>
-  void traverse(const Request& req,
-                const RouteHandleTraverser<McrouterRouteHandleIf>& t) const {
+  void traverse(
+      const Request& req,
+      const RouteHandleTraverser<RouteHandleIf>& t) const {
     t(*target_, req);
   }
 
-  OutstandingLimitRoute(McrouterRouteHandlePtr target, size_t maxOutstanding)
-    : target_(std::move(target)), maxOutstanding_(maxOutstanding) {
-  }
+  OutstandingLimitRoute(
+      std::shared_ptr<RouteHandleIf> target,
+      size_t maxOutstanding)
+      : target_(std::move(target)), maxOutstanding_(maxOutstanding) {}
 
   template <class Request>
   ReplyT<Request> route(const Request& req) {
     if (outstanding_ == maxOutstanding_) {
-      auto& ctx = fiber_local::getSharedCtx();
+      auto& ctx = fiber_local<RouterInfo>::getSharedCtx();
       auto senderId = ctx->senderId();
       auto& entry = [&]() -> QueueEntry& {
         auto entry_it = senderIdToEntry_.find(senderId);
@@ -69,33 +84,37 @@ class OutstandingLimitRoute {
         return *blockedRequests_.back();
       }();
 
-      auto& stats = ctx->proxy().stats;
+      auto& stats = ctx->proxy().stats();
       folly::fibers::Baton baton;
       int64_t waitingSince = 0;
-      if (GetLike<Request>::value) {
+      if (carbon::GetLike<Request>::value) {
         ++currentGetReqsWaiting_;
         waitingSince = nowUs();
-      } else if (UpdateLike<Request>::value) {
+      } else if (carbon::UpdateLike<Request>::value) {
         ++currentUpdateReqsWaiting_;
         waitingSince = nowUs();
       }
       entry.batons.push_back(&baton);
       baton.wait();
       if (waitingSince > 0) {
-        if (GetLike<Request>::value) {
-          stat_incr(stats, outstanding_route_get_wait_time_sum_us_stat,
-                    static_cast<uint64_t>(nowUs() - waitingSince));
-          stat_incr(stats, outstanding_route_get_reqs_queued_helper_stat,
-                    currentGetReqsWaiting_);
+        if (carbon::GetLike<Request>::value) {
+          stats.increment(
+              outstanding_route_get_wait_time_sum_us_stat,
+              static_cast<uint64_t>(nowUs() - waitingSince));
+          stats.increment(
+              outstanding_route_get_reqs_queued_helper_stat,
+              currentGetReqsWaiting_);
           --currentGetReqsWaiting_;
-          stat_incr(stats, outstanding_route_get_reqs_queued_stat, 1);
-        } else if (UpdateLike<Request>::value) {
-          stat_incr(stats, outstanding_route_update_wait_time_sum_us_stat,
-                    static_cast<uint64_t>(nowUs() - waitingSince));
-          stat_incr(stats, outstanding_route_update_reqs_queued_helper_stat,
-                    currentUpdateReqsWaiting_);
+          stats.increment(outstanding_route_get_reqs_queued_stat, 1);
+        } else if (carbon::UpdateLike<Request>::value) {
+          stats.increment(
+              outstanding_route_update_wait_time_sum_us_stat,
+              static_cast<uint64_t>(nowUs() - waitingSince));
+          stats.increment(
+              outstanding_route_update_reqs_queued_helper_stat,
+              currentUpdateReqsWaiting_);
           --currentUpdateReqsWaiting_;
-          stat_incr(stats, outstanding_route_update_reqs_queued_stat, 1);
+          stats.increment(outstanding_route_update_reqs_queued_stat, 1);
         }
       }
     } else {
@@ -127,7 +146,7 @@ class OutstandingLimitRoute {
   }
 
  private:
-  const McrouterRouteHandlePtr target_;
+  const std::shared_ptr<RouteHandleIf> target_;
   const size_t maxOutstanding_;
   size_t outstanding_{0};
   size_t currentGetReqsWaiting_{0};
@@ -137,8 +156,7 @@ class OutstandingLimitRoute {
     QueueEntry(QueueEntry&&) = delete;
     QueueEntry& operator=(QueueEntry&&) = delete;
 
-    explicit QueueEntry(size_t senderId_) : senderId(senderId_) {
-    }
+    explicit QueueEntry(size_t senderId_) : senderId(senderId_) {}
     size_t senderId;
     std::list<folly::fibers::Baton*> batons;
   };
@@ -147,4 +165,14 @@ class OutstandingLimitRoute {
   std::unordered_map<size_t, QueueEntry*> senderIdToEntry_;
 };
 
-}}}  // facebook::memcache::mcrouter
+template <class RouterInfo>
+std::shared_ptr<typename RouterInfo::RouteHandleIf> makeOutstandingLimitRoute(
+    std::shared_ptr<typename RouterInfo::RouteHandleIf> normalRoute,
+    size_t maxOutstanding) {
+  return makeRouteHandleWithInfo<RouterInfo, OutstandingLimitRoute>(
+      std::move(normalRoute), maxOutstanding);
+}
+
+} // mcrouter
+} // memcache
+} // facebook

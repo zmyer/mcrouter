@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -37,8 +37,9 @@ class ConnectionFifo {
    * @param debugFifo   Underlying FIFO to which the data will be written.
    * @param transport   Transport from which data will be mirrored.
    */
-  ConnectionFifo(std::shared_ptr<Fifo> debugFifo,
-                 const folly::AsyncTransportWrapper* transport) noexcept;
+  ConnectionFifo(
+      std::shared_ptr<Fifo> debugFifo,
+      const folly::AsyncTransportWrapper* transport) noexcept;
 
   /**
    * Tells whether or not there is a client connected to the underlying FIFO.
@@ -49,8 +50,9 @@ class ConnectionFifo {
    * Starts a new message.
    *
    * @param direction   Whether the data was received or sent by connection.
+   * @param typeId      Id of the type of the message.
    */
-  bool startMessage(MessageDirection direction) noexcept;
+  bool startMessage(MessageDirection direction, uint32_t typeId) noexcept;
 
   /**
    * Writes data to the FIFO, but only if there is reader (i.e. mcpiper)

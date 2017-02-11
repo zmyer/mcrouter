@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -13,8 +13,7 @@
 
 #include <gtest/gtest.h>
 
-#include "mcrouter/lib/network/TypedThriftMessage.h"
-#include "mcrouter/lib/network/gen-cpp2/mc_caret_protocol_types.h"
+#include "mcrouter/lib/network/gen/Memcache.h"
 #include "mcrouter/routes/OutstandingLimitRoute.h"
 #include "mcrouter/routes/test/RouteHandleTestUtil.h"
 
@@ -27,37 +26,38 @@ std::string makeKey(uint64_t id) {
   return folly::sformat("test-key:{}", id);
 }
 
-}  // anonymous namespace
+} // anonymous namespace
 
-void sendRequest(folly::fibers::FiberManager& fm,
-                 McrouterRouteHandleIf& rh,
-                 size_t id,
-                 uint64_t senderId,
-                 std::vector<std::string>& replyOrder) {
+void sendRequest(
+    folly::fibers::FiberManager& fm,
+    McrouterRouteHandleIf& rh,
+    size_t id,
+    uint64_t senderId,
+    std::vector<std::string>& replyOrder) {
   auto context = getTestContext();
   context->setSenderIdForTest(senderId);
 
   fm.addTask([&rh, id, context, &replyOrder]() {
-      TypedThriftRequest<cpp2::McGetRequest> request(makeKey(id));
-      fiber_local::setSharedCtx(std::move(context));
-      rh.route(request);
-      replyOrder.push_back(makeKey(id));
-    });
+    McGetRequest request(makeKey(id));
+    fiber_local<MemcacheRouterInfo>::setSharedCtx(std::move(context));
+    rh.route(request);
+    replyOrder.push_back(makeKey(id));
+  });
 }
 
 TEST(oustandingLimitRouteTest, basic) {
-  auto normalHandle = std::make_shared<TestHandle>(
-    GetRouteTestData(mc_res_found, "a"));
+  auto normalHandle =
+      std::make_shared<TestHandle>(GetRouteTestData(mc_res_found, "a"));
 
-  McrouterRouteHandle<OutstandingLimitRoute> rh(
-    normalHandle->rh,
-    3);
+  McrouterRouteHandle<OutstandingLimitRoute<McrouterRouterInfo>> rh(
+      normalHandle->rh, 3);
 
   normalHandle->pause();
 
   std::vector<std::string> replyOrder;
 
-  TestFiberManager testfm{fiber_local::ContextTypeTag()};
+  TestFiberManager testfm{
+      typename fiber_local<MemcacheRouterInfo>::ContextTypeTag()};
   auto& fm = testfm.getFiberManager();
 
   sendRequest(fm, rh, 1, 1, replyOrder);
@@ -76,13 +76,11 @@ TEST(oustandingLimitRouteTest, basic) {
   sendRequest(fm, rh, 14, 0, replyOrder);
 
   auto& loopController =
-    dynamic_cast<folly::fibers::SimpleLoopController&>(fm.loopController());
+      dynamic_cast<folly::fibers::SimpleLoopController&>(fm.loopController());
   loopController.loop([&]() {
-      fm.addTask([&]() {
-          normalHandle->unpause();
-        });
-      loopController.stop();
-    });
+    fm.addTask([&]() { normalHandle->unpause(); });
+    loopController.stop();
+  });
 
   EXPECT_EQ(14, replyOrder.size());
   EXPECT_EQ(makeKey(1), replyOrder[0]);

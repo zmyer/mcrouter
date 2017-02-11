@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -230,17 +230,22 @@ size_t Lz4Immutable::compressBound(size_t size) const noexcept {
 }
 
 std::unique_ptr<folly::IOBuf> Lz4Immutable::compress(
-    const folly::IOBuf& source) const noexcept {
+    const folly::IOBuf& source) const {
   auto iov = source.getIov();
   return compress(iov.data(), iov.size());
 }
 
 std::unique_ptr<folly::IOBuf> Lz4Immutable::compress(
     const struct iovec* iov,
-    size_t iovcnt) const noexcept {
+    size_t iovcnt) const {
   IovecCursor source(iov, iovcnt);
-  CHECK_LE(source.totalLength(), kMaxInputSize)
-      << "Data too large to compress!";
+
+  if (source.totalLength() > kMaxInputSize) {
+    throw std::invalid_argument(folly::sformat(
+        "Data too large to compress. Size: {}. Max size allowed: {}",
+        source.totalLength(),
+        kMaxInputSize));
+  }
 
   // Creates a match cursor - a cursor that will keep track of matches
   // found in the dictionary.
@@ -315,8 +320,7 @@ std::unique_ptr<folly::IOBuf> Lz4Immutable::compress(
 
         uint32_t matchPos = getPositionOnHash(state_.table, hash);
         match.seek(matchPos);
-      } while (((match.tell() + dictionaryDiff) <=
-                source.tell()) ||
+      } while (((match.tell() + dictionaryDiff) <= source.tell()) ||
                (match.peek<uint32_t>() != source.peek<uint32_t>()));
 
       if (!running) {
@@ -325,8 +329,7 @@ std::unique_ptr<folly::IOBuf> Lz4Immutable::compress(
     }
 
     // Catch up - try to expand the match backwards.
-    while (source.tell() > anchorCursor.tell() &&
-           match.tell() > 0) {
+    while (source.tell() > anchorCursor.tell() && match.tell() > 0) {
       source.retreat(1);
       match.retreat(1);
       if (LIKELY(source.peek<uint8_t>() != match.peek<uint8_t>())) {
@@ -338,8 +341,7 @@ std::unique_ptr<folly::IOBuf> Lz4Immutable::compress(
 
     // Write literal
     {
-      size_t literalLen =
-          source.tell() - anchorCursor.tell();
+      size_t literalLen = source.tell() - anchorCursor.tell();
       token = output++;
 
       // Check output limit
@@ -365,16 +367,15 @@ std::unique_ptr<folly::IOBuf> Lz4Immutable::compress(
     }
 
     // Encode offset
-    uint16_t offset = dicCursor.totalLength() - match.tell() +
-        source.tell();
+    uint16_t offset = dicCursor.totalLength() - match.tell() + source.tell();
     writeLE(output, static_cast<uint16_t>(offset));
     output += 2;
 
     // Encode matchLength
     {
       // we cannot go past the dictionary
-      size_t posLimit = source.tell() +
-          (dicCursor.totalLength() - match.tell());
+      size_t posLimit =
+          source.tell() + (dicCursor.totalLength() - match.tell());
       // Nor go past the source buffer
       posLimit = std::min(posLimit, matchLimit);
 

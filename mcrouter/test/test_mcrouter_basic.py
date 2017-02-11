@@ -1,4 +1,4 @@
-# Copyright (c) 2016, Facebook, Inc.
+# Copyright (c) 2017, Facebook, Inc.
 # All rights reserved.
 #
 # This source code is licensed under the BSD-style license found in the
@@ -43,10 +43,10 @@ class TestMcrouterBasic(McrouterTestCase):
         self.assertEqual(result2["token"], None)
         self.assertEqual(result2["value"], "newvalue")
 
-        # Test stale stored: lease-get followed by a delete
+        # lease-get followed by a delete means the next lease-set will fail
         result = mcr.leaseGet("newtestkey")
         self.assertFalse(mcr.delete("newtestkey"))
-        self.assertTrue(mcr.leaseSet("newtestkey", result, is_stalestored=True))
+        self.assertFalse(mcr.leaseSet("newtestkey", result))
 
     def test_invalid_key(self):
         """
@@ -73,8 +73,7 @@ class TestMcrouterBasic(McrouterTestCase):
         self.assertTrue(res)
 
         # Stats with args
-        args = ['detailed', 'cmd', 'cmd-in', 'cmd-out', 'cmd-error',
-                'servers', 'suspect_servers', 'memory', 'count', 'outlier']
+        args = ['detailed', 'cmd-error', 'servers', 'suspect_servers', 'count']
         for arg in args:
             res = mcr.issue_command_and_read_all('stats{0}\r\n'.format(arg))
             self.assertTrue('CLIENT_ERROR' in res)

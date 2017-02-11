@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -9,10 +9,8 @@
  */
 #include "McSerializedRequest.h"
 
-#include "mcrouter/lib/McMsgRef.h"
-#include "mcrouter/lib/McRequest.h"
-
-namespace facebook { namespace memcache {
+namespace facebook {
+namespace memcache {
 
 McSerializedRequest::~McSerializedRequest() {
   switch (protocol_) {
@@ -31,17 +29,5 @@ McSerializedRequest::~McSerializedRequest() {
       break;
   }
 }
-
-bool McSerializedRequest::checkKeyLength(const folly::IOBuf& key) {
-  if (key.computeChainDataLength() > MC_KEY_MAX_LEN_UMBRELLA) {
-    result_ = Result::BAD_KEY;
-    return false;
-  }
-  return true;
 }
-
-McSerializedRequest::Result McSerializedRequest::serializationResult() const {
-  return result_;
-}
-
-}} // facebook::memcache
+} // facebook::memcache

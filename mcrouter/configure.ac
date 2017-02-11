@@ -11,11 +11,9 @@ AC_INIT([mcrouter], [mcrouter_version], mcrouter@fb.com)
 
 AC_DEFINE_UNQUOTED([MCROUTER_PACKAGE_STRING], ["AC_PACKAGE_VERSION AC_PACKAGE_NAME"], [Full name and version of this package, with version coming first for libmemcached compatibility])
 
-AC_CONFIG_SRCDIR([McrouterInstance.h])
+AC_CONFIG_SRCDIR([CarbonRouterInstance.h])
 AC_CONFIG_HEADERS([config.h:config.hin])
 AC_CONFIG_LINKS([config-impl.h:mcrouter_config-impl.h])
-AC_CONFIG_LINKS([lib/network/CaretSerializedMessage.h:lib/network/CaretSerializedMessageImpl.h])
-AC_CONFIG_LINKS([lib/network/CaretReplyConverter.h:lib/network/CaretReplyConverterImpl.h])
 AC_CONFIG_LINKS([test/config.py:test/mcrouter_config.py])
 AC_CONFIG_AUX_DIR([build-aux])
 
@@ -35,14 +33,6 @@ AC_PROG_CPP
 AX_PYTHON_DEVEL()
 AX_CXX_COMPILE_STDCXX_11([],[mandatory])
 LT_INIT
-
-AC_ARG_VAR([THRIFT2_COMP_DIR], [Full path to directory containing fbthrift's \
-            main.py (cpp2 compiler)])
-AS_IF([test x"$THRIFT2_COMP_DIR" = x],
-      [AC_MSG_ERROR([Path to fbthrift cpp2 compiler must be specified])],
-      [THRIFT="python$PYTHON_VERSION $THRIFT2_COMP_DIR/main.py"])
-
-AC_SUBST([THRIFT])
 
 CXXFLAGS="-fno-strict-aliasing $CXXFLAGS"
 CXXFLAGS="-W -Wall -Wextra -Wno-unused-parameter $CXXFLAGS"
@@ -108,6 +98,7 @@ AX_BOOST_FILESYSTEM
 AX_BOOST_PROGRAM_OPTIONS
 AX_BOOST_REGEX
 AX_BOOST_SYSTEM
+AX_BOOST_THREAD
 
 # Checks for header files.
 AC_HEADER_STDC
@@ -162,7 +153,7 @@ AC_CHECK_FUNCS([gettimeofday \
 
 LIBS="$LIBS $BOOST_LDFLAGS $BOOST_CONTEXT_LIB $BOOST_FILESYSTEM_LIB \
       $BOOST_PROGRAM_OPTIONS_LIB $BOOST_SYSTEM_LIB $BOOST_REGEX_LIB \
-      -lpthread -pthread -lthriftprotocol"
+      $BOOST_THREAD_LIB -lpthread -pthread"
 
 AM_PATH_PYTHON([2.6],, [:])
 AM_CONDITIONAL([HAVE_PYTHON], [test "$PYTHON" != :])
@@ -173,8 +164,6 @@ AH_BOTTOM([#include "mcrouter_config.h"])
 AC_CONFIG_FILES([Makefile
                  lib/Makefile
                  lib/test/Makefile
-                 lib/allocator/Makefile
-                 lib/allocator/test/Makefile
                  lib/config/Makefile
                  lib/config/test/Makefile
                  lib/cycles/Makefile
@@ -183,8 +172,6 @@ AC_CONFIG_FILES([Makefile
                  lib/fbi/test/Makefile
                  lib/fbi/cpp/Makefile
                  lib/fbi/cpp/test/Makefile
-                 lib/mc/Makefile
-                 lib/mc/test/Makefile
                  lib/network/Makefile
                  lib/network/test/Makefile
                  routes/Makefile

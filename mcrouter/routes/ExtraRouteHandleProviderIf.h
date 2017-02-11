@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -14,30 +14,39 @@
 #include <folly/Range.h>
 
 #include "mcrouter/lib/config/RouteHandleFactory.h"
-#include "mcrouter/routes/McrouterRouteHandle.h"
 #include "mcrouter/routes/ShadowRouteIf.h"
 
-namespace facebook { namespace memcache { namespace mcrouter {
+namespace facebook {
+namespace memcache {
+namespace mcrouter {
 
-struct proxy_t;
+class ProxyBase;
 
 /**
  * Interface to create additional route handles for McRouteHandleProvider.
  */
+template <class RouterInfo>
 class ExtraRouteHandleProviderIf {
  public:
-  virtual McrouterRouteHandlePtr
-  makeShadow(proxy_t& proxy,
-             McrouterRouteHandlePtr destination,
-             McrouterShadowData data,
-             folly::StringPiece shadowPolicy) = 0;
+  using RouteHandleIf = typename RouterInfo::RouteHandleIf;
 
-  virtual std::vector<McrouterRouteHandlePtr>
-  tryCreate(RouteHandleFactory<McrouterRouteHandleIf>& factory,
-            folly::StringPiece type,
-            const folly::dynamic& json) = 0;
+  virtual std::shared_ptr<RouteHandleIf> makeShadow(
+      ProxyBase& proxy,
+      std::shared_ptr<RouteHandleIf> destination,
+      ShadowData<RouterInfo> data,
+      folly::StringPiece shadowPolicy) = 0;
+
+  virtual std::shared_ptr<RouteHandleIf> makeFailoverRoute(
+      const folly::dynamic& json,
+      std::vector<std::shared_ptr<RouteHandleIf>> children) = 0;
+
+  virtual std::vector<std::shared_ptr<RouteHandleIf>> tryCreate(
+      RouteHandleFactory<RouteHandleIf>& factory,
+      folly::StringPiece type,
+      const folly::dynamic& json) = 0;
 
   virtual ~ExtraRouteHandleProviderIf() {}
 };
-
-}}}  // facebook::memcache::mcrouter
+}
+}
+} // facebook::memcache::mcrouter

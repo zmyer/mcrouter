@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -13,14 +13,12 @@
 
 #include <folly/Optional.h>
 
-#include "mcrouter/lib/network/gen-cpp2/mc_caret_protocol_types.h"
 #include "mcrouter/lib/network/McServerRequestContext.h"
-#include "mcrouter/lib/network/TypedThriftMessage.h"
+#include "mcrouter/lib/network/gen/Memcache.h"
 
+namespace facebook {
+namespace memcache {
 
-namespace facebook { namespace memcache {
-
-class McReply;
 class McServerSession;
 
 /**
@@ -60,7 +58,6 @@ class MultiOpParent {
    * @return true if the parent assumed ownership of reporting an error.
    *         On true, errorMessage is moved out of.
    */
-  bool reply(McReply&& reply);
   bool reply(mc_res_t result, uint32_t errorCode, std::string&& errorMessage);
 
   /**
@@ -71,7 +68,7 @@ class MultiOpParent {
   }
 
   /**
-   * Notify that we saw an mc_op_end, and create the 'end' context
+   * Notify that we saw a multi-op end sentinel, and create the 'end' context
    * with this id.
    */
   void recordEnd(uint64_t reqid);
@@ -85,7 +82,7 @@ class MultiOpParent {
 
  private:
   size_t waiting_{0};
-  folly::Optional<TypedThriftReply<cpp2::McGetReply>> reply_;
+  folly::Optional<McGetReply> reply_;
   bool error_{false};
 
   McServerSession& session_;
@@ -94,5 +91,5 @@ class MultiOpParent {
 
   void release();
 };
-
-}}  // facebook::memcache
+}
+} // facebook::memcache

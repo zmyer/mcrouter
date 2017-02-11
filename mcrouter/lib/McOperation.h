@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -9,26 +9,15 @@
  */
 #pragma once
 
-/**
- * Operation and ReplyType Specializations for McRequest/McReply.
- */
-
 #include <string>
 #include <type_traits>
 
-#include "mcrouter/lib/mc/msg.h"
-#include "mcrouter/lib/network/ThriftMessageList.h"
 #include "mcrouter/lib/Operation.h"
+#include "mcrouter/lib/mc/msg.h"
+#include "mcrouter/lib/network/CarbonMessageList.h"
 
-namespace facebook { namespace memcache {
-
-class McReply;
-
-template <class M>
-class TypedThriftReply;
-
-template <class M>
-class TypedThriftRequest;
+namespace facebook {
+namespace memcache {
 
 /**
  * For existing memcache operations, we use a template trick:
@@ -43,14 +32,9 @@ struct McOperation {
 template <int op>
 const char* const McOperation<op>::name = mc_op_to_string((mc_op_t)op);
 
-template <class Request>
-struct ReplyType {
-  using type = McReply;
-};
-
 template <class M>
-struct ReplyType<TypedThriftRequest<M>> {
-  using type = TypedThriftReply<ReplyFromRequestType<M, RequestReplyPairs>>;
+struct ReplyType {
+  using type = typename M::reply_type;
 };
-
-}} // facebook::memcache
+}
+} // facebook::memcache

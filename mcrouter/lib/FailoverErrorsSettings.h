@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -14,50 +14,62 @@
 #include <string>
 #include <vector>
 
+#include "mcrouter/lib/McResUtil.h"
+#include "mcrouter/lib/Operation.h"
+#include "mcrouter/lib/carbon/RoutingGroups.h"
 #include "mcrouter/lib/mc/msg.h"
-#include "mcrouter/lib/McReply.h"
-#include "mcrouter/lib/OperationTraits.h"
 
 namespace folly {
 struct dynamic;
 } // folly
 
-namespace facebook { namespace memcache {
+namespace facebook {
+namespace memcache {
 
 class FailoverErrorsSettings {
  public:
   FailoverErrorsSettings() = default;
   explicit FailoverErrorsSettings(std::vector<std::string> errors);
-  FailoverErrorsSettings(std::vector<std::string> errorsGet,
-                         std::vector<std::string> errorsUpdate,
-                         std::vector<std::string> errorsDelete);
+  FailoverErrorsSettings(
+      std::vector<std::string> errorsGet,
+      std::vector<std::string> errorsUpdate,
+      std::vector<std::string> errorsDelete);
   explicit FailoverErrorsSettings(const folly::dynamic& json);
 
   template <class Request>
-  bool shouldFailover(const ReplyT<Request>& reply, const Request&,
-                      DeleteLikeT<Request> = 0) const {
+  bool shouldFailover(
+      const ReplyT<Request>& reply,
+      const Request&,
+      carbon::DeleteLikeT<Request> = 0) const {
     return deletes_.shouldFailover(reply.result());
   }
 
   template <class Request>
-  bool shouldFailover(const ReplyT<Request>& reply, const Request&,
-                      GetLikeT<Request> = 0) const {
+  bool shouldFailover(
+      const ReplyT<Request>& reply,
+      const Request&,
+      carbon::GetLikeT<Request> = 0) const {
     return gets_.shouldFailover(reply.result());
   }
 
   template <class Request>
-  bool shouldFailover(const ReplyT<Request>& reply, const Request&,
-                      UpdateLikeT<Request> = 0) const {
+  bool shouldFailover(
+      const ReplyT<Request>& reply,
+      const Request&,
+      carbon::UpdateLikeT<Request> = 0) const {
     return updates_.shouldFailover(reply.result());
   }
 
   template <class Request>
-  bool shouldFailover(const ReplyT<Request>& reply, const Request&,
-                      OtherThanT<Request,
-                                 DeleteLike<>,
-                                 GetLike<>,
-                                 UpdateLike<>> = 0) const {
-    return reply.isFailoverError();
+  bool shouldFailover(
+      const ReplyT<Request>& reply,
+      const Request&,
+      carbon::OtherThanT<
+          Request,
+          carbon::DeleteLike<>,
+          carbon::GetLike<>,
+          carbon::UpdateLike<>> = 0) const {
+    return isFailoverErrorResult(reply.result());
   }
 
   class List {
@@ -79,5 +91,5 @@ class FailoverErrorsSettings {
   FailoverErrorsSettings::List updates_;
   FailoverErrorsSettings::List deletes_;
 };
-
-}} // facebook::memcache
+}
+} // facebook::memcache

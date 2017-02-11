@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -12,22 +12,27 @@
 #include "mcrouter/lib/debug/ConnectionFifo.h"
 #include "mcrouter/lib/network/UmbrellaProtocol.h"
 
-namespace facebook { namespace memcache {
+namespace facebook {
+namespace memcache {
 
 template <class Callback>
-ServerMcParser<Callback>::ServerMcParser(Callback& cb,
-                                         size_t minBufferSize,
-                                         size_t maxBufferSize,
-                                         ConnectionFifo* debugFifo)
-  : parser_(*this, minBufferSize, maxBufferSize, debugFifo),
-    asciiParser_(*this),
-    callback_(cb),
-    debugFifo_(debugFifo) {
-}
+ServerMcParser<Callback>::ServerMcParser(
+    Callback& cb,
+    size_t minBufferSize,
+    size_t maxBufferSize,
+    ConnectionFifo* debugFifo)
+    : parser_(
+          *this,
+          minBufferSize,
+          maxBufferSize,
+          /* useJemallocNodumpAllocator */ false,
+          debugFifo),
+      asciiParser_(*this),
+      callback_(cb),
+      debugFifo_(debugFifo) {}
 
 template <class Callback>
-ServerMcParser<Callback>::~ServerMcParser() {
-}
+ServerMcParser<Callback>::~ServerMcParser() {}
 
 template <class Callback>
 std::pair<void*, size_t> ServerMcParser<Callback>::getReadBuffer() {
@@ -49,41 +54,49 @@ bool ServerMcParser<Callback>::readDataAvailable(size_t len) {
 }
 
 template <class Callback>
-template <class ThriftType>
+template <class Request>
 void ServerMcParser<Callback>::requestReadyHelper(
-    TypedThriftRequest<ThriftType>&& req, uint64_t reqid) {
+    Request&& req,
+    uint64_t reqid) {
   callback_.umbrellaRequestReady(std::move(req), reqid);
 }
 
 template <class Callback>
-bool ServerMcParser<Callback>::umMessageReady(const UmbrellaMessageInfo& info,
-                                              const folly::IOBuf& buffer) {
+bool ServerMcParser<Callback>::umMessageReady(
+    const UmbrellaMessageInfo& info,
+    const folly::IOBuf& buffer) {
   try {
     uint64_t reqid;
-    const mc_op_t op = umbrellaDetermineOperation(
-        buffer.data(), info.headerSize);
+    const mc_op_t op =
+        umbrellaDetermineOperation(buffer.data(), info.headerSize);
     switch (op) {
-#define THRIFT_OP(MC_OPERATION)                                                \
-      case MC_OPERATION::mc_op:                                              \
-      {                                                                      \
-        TypedThriftRequest<typename TypeFromOp<MC_OPERATION::mc_op,          \
-                                               RequestOpMapping>::type> req; \
-        umbrellaParseRequest(                                                \
-            req, buffer, buffer.data(), info.headerSize,                     \
-            buffer.data() + info.headerSize, info.bodySize,                  \
-            reqid);                                                          \
-        requestReadyHelper(std::move(req), reqid);                           \
-        break;                                                               \
-      }
+#define THRIFT_OP(MC_OPERATION)                                           \
+  case MC_OPERATION::mc_op: {                                             \
+    using Request =                                                       \
+        typename TypeFromOp<MC_OPERATION::mc_op, RequestOpMapping>::type; \
+    auto req = umbrellaParseRequest<Request>(                             \
+        buffer,                                                           \
+        buffer.data(),                                                    \
+        info.headerSize,                                                  \
+        buffer.data() + info.headerSize,                                  \
+        info.bodySize,                                                    \
+        reqid);                                                           \
+    requestReadyHelper(std::move(req), reqid);                            \
+    break;                                                                \
+  }
 #include "mcrouter/lib/McOpList.h"
       default:
-        LOG(ERROR) << "Unexpected Umbrella message of type "
-          << mc_op_to_string(op) << " (" << int(op) << ")";
-        break;
+        auto reason = folly::sformat(
+            "Error parsing Umbrella message. "
+            "Unexpected Umbrella message of type: {} ({}).",
+            mc_op_to_string(op),
+            int(op));
+        callback_.parseError(mc_res_remote_error, reason);
+        return false;
     }
-  } catch (const std::runtime_error& e) {
+  } catch (const std::exception& e) {
     std::string reason(
-      std::string("Error parsing Umbrella message: ") + e.what());
+        std::string("Error parsing Umbrella message: ") + e.what());
     callback_.parseError(mc_res_remote_error, reason);
     return false;
   }
@@ -97,9 +110,8 @@ bool ServerMcParser<Callback>::caretMessageReady(
   try {
     // Caret header and body are assumed to be in one coalesced IOBuf
     callback_.caretRequestReady(headerInfo, buffer);
-  } catch (const std::runtime_error& e) {
-    std::string reason(
-      std::string("Error parsing Caret message: ") + e.what());
+  } catch (const std::exception& e) {
+    std::string reason(std::string("Error parsing Caret message: ") + e.what());
     callback_.parseError(mc_res_remote_error, reason);
     return false;
   }
@@ -109,9 +121,9 @@ bool ServerMcParser<Callback>::caretMessageReady(
 template <class Callback>
 void ServerMcParser<Callback>::handleAscii(folly::IOBuf& readBuffer) {
   if (UNLIKELY(parser_.protocol() != mc_ascii_protocol)) {
-    std::string reason(
-      folly::sformat("Expected {} protocol, but received ASCII!",
-                     mc_protocol_to_string(parser_.protocol())));
+    std::string reason(folly::sformat(
+        "Expected {} protocol, but received ASCII!",
+        mc_protocol_to_string(parser_.protocol())));
     callback_.parseError(mc_res_local_error, reason);
     return;
   }
@@ -122,21 +134,21 @@ void ServerMcParser<Callback>::handleAscii(folly::IOBuf& readBuffer) {
   if (result == McAsciiParserBase::State::ERROR) {
     // Note: we could include actual parsing error instead of
     // "malformed request" (e.g. asciiParser_.getErrorDescription()).
-    callback_.parseError(mc_res_client_error,
-                         "malformed request");
+    callback_.parseError(mc_res_client_error, "malformed request");
   }
 }
 
 template <class Callback>
-void ServerMcParser<Callback>::parseError(mc_res_t result,
-                                          folly::StringPiece reason) {
+void ServerMcParser<Callback>::parseError(
+    mc_res_t result,
+    folly::StringPiece reason) {
   callback_.parseError(result, reason);
 }
 
 template <class Callback>
 bool ServerMcParser<Callback>::shouldReadToAsciiBuffer() const {
   return parser_.protocol() == mc_ascii_protocol &&
-         asciiParser_.hasReadBuffer();
+      asciiParser_.hasReadBuffer();
 }
 
 template <class Callback>
@@ -161,8 +173,8 @@ void ServerMcParser<Callback>::writeToPipe(const Request& req) {
   const struct iovec* iov;
   size_t iovLen;
   debugSerializedRequest.prepare(req, iov, iovLen);
-  debugFifo_->startMessage(MessageDirection::Received);
+  debugFifo_->startMessage(MessageDirection::Received, Request::typeId);
   debugFifo_->writeData(iov, iovLen);
 }
-
-}}  // facebook::memcache
+}
+} // facebook::memcache

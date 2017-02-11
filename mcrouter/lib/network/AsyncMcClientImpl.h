@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -12,10 +12,10 @@
 #include <chrono>
 #include <string>
 
-#include <folly/experimental/fibers/Baton.h>
+#include <folly/fibers/Baton.h>
+#include <folly/io/IOBufQueue.h>
 #include <folly/io/async/AsyncTransport.h>
 #include <folly/io/async/DelayedDestruction.h>
-#include <folly/io/IOBufQueue.h>
 
 #include "mcrouter/lib/CompressionCodecManager.h"
 #include "mcrouter/lib/Operation.h"
@@ -24,8 +24,10 @@
 #include "mcrouter/lib/network/ClientMcParser.h"
 #include "mcrouter/lib/network/ConnectionOptions.h"
 #include "mcrouter/lib/network/McClientRequestContext.h"
+#include "mcrouter/lib/network/ReplyStatsContext.h"
 
-namespace facebook { namespace memcache {
+namespace facebook {
+namespace memcache {
 
 namespace detail {
 class OnEventBaseDestructionCallback;
@@ -36,16 +38,14 @@ class OnEventBaseDestructionCallback;
  *
  * This is an impl class, user should use AsyncMcClient.
  */
-class AsyncMcClientImpl :
-      public folly::DelayedDestruction,
-      private folly::AsyncSocket::ConnectCallback,
-      private folly::AsyncTransportWrapper::ReadCallback,
-      private folly::AsyncTransportWrapper::WriteCallback {
-
+class AsyncMcClientImpl : public folly::DelayedDestruction,
+                          private folly::AsyncSocket::ConnectCallback,
+                          private folly::AsyncTransportWrapper::ReadCallback,
+                          private folly::AsyncTransportWrapper::WriteCallback {
  public:
-
-  static std::shared_ptr<AsyncMcClientImpl> create(folly::EventBase& eventBase,
-                                                   ConnectionOptions options);
+  static std::shared_ptr<AsyncMcClientImpl> create(
+      folly::EventBase& eventBase,
+      ConnectionOptions options);
 
   AsyncMcClientImpl(const AsyncMcClientImpl&) = delete;
   AsyncMcClientImpl& operator=(const AsyncMcClientImpl&) = delete;
@@ -54,16 +54,18 @@ class AsyncMcClientImpl :
   void closeNow();
 
   void setStatusCallbacks(
-    std::function<void()> onUp,
-    std::function<void(bool)> onDown);
+      std::function<void()> onUp,
+      std::function<void(bool)> onDown);
 
   void setRequestStatusCallbacks(
       std::function<void(int pendingDiff, int inflightDiff)> onStateChange,
       std::function<void(int numToSend)> onWrite);
 
   template <class Request>
-  ReplyT<Request> sendSync(const Request& request,
-                           std::chrono::milliseconds timeout);
+  ReplyT<Request> sendSync(
+      const Request& request,
+      std::chrono::milliseconds timeout,
+      ReplyStatsContext* replyContext);
 
   void setThrottle(size_t maxInflight, size_t maxPending);
 
@@ -78,6 +80,11 @@ class AsyncMcClientImpl :
   const folly::AsyncTransportWrapper* getTransport() {
     return socket_.get();
   }
+
+  double getRetransmissionInfo();
+
+  template <class Request>
+  double getDropProbability() const;
 
  private:
   using ParserT = ClientMcParser<AsyncMcClientImpl>;
@@ -119,7 +126,7 @@ class AsyncMcClientImpl :
   // Debug pipe.
   ConnectionFifo debugFifo_;
 
-  CodecIdRange supportedCompressionCodecs_{0, 0};
+  CodecIdRange supportedCompressionCodecs_ = CodecIdRange::Empty;
 
   bool outOfOrder_{false};
   McClientRequestContextQueue queue_;
@@ -131,6 +138,10 @@ class AsyncMcClientImpl :
   size_t maxPending_{0};
   size_t maxInflight_{0};
 
+  // Retransmission values
+  uint32_t lastRetrans_{0}; // last known value of the no. of retransmissions
+  uint64_t lastKBytes_{0}; // last known number of kBs sent
+
   // Writer loop related variables.
   class WriterLoop;
   bool writeScheduled_{false};
@@ -138,10 +149,9 @@ class AsyncMcClientImpl :
 
   bool isAborting_{false};
   std::unique_ptr<detail::OnEventBaseDestructionCallback>
-    eventBaseDestructionCallback_;
+      eventBaseDestructionCallback_;
 
-  AsyncMcClientImpl(folly::EventBase& eventBase,
-                    ConnectionOptions options);
+  AsyncMcClientImpl(folly::EventBase& eventBase, ConnectionOptions options);
 
   ~AsyncMcClientImpl();
 
@@ -154,6 +164,7 @@ class AsyncMcClientImpl :
   // Schedule next writer loop if it's not scheduled.
   void scheduleNextWriterLoop();
   void cancelWriterCallback();
+  size_t getNumToSend() const;
 
   void attemptConnection();
 
@@ -163,8 +174,8 @@ class AsyncMcClientImpl :
 
   // TAsyncSocket::ConnectCallback overrides
   void connectSuccess() noexcept override final;
-  void connectErr(const folly::AsyncSocketException& ex)
-    noexcept override final;
+  void connectErr(
+      const folly::AsyncSocketException& ex) noexcept override final;
 
   // We've have encountered some error or we're shutting down the client.
   // It goes to DOWN state.
@@ -178,12 +189,14 @@ class AsyncMcClientImpl :
 
   // AsyncTransportWrapper::WriteCallback overrides
   void writeSuccess() noexcept override final;
-  void writeErr(size_t bytesWritten,
-                const folly::AsyncSocketException& ex) noexcept override final;
+  void writeErr(
+      size_t bytesWritten,
+      const folly::AsyncSocketException& ex) noexcept override final;
 
   // Callbacks for McParser.
   template <class Reply>
-  void replyReady(Reply&& reply, uint64_t reqId);
+  void replyReady(Reply&& reply, uint64_t reqId, ReplyStatsContext replyStats);
+
   void parseError(mc_res_t result, folly::StringPiece reason);
   bool nextReplyAvailable(uint64_t reqId);
 
@@ -191,7 +204,7 @@ class AsyncMcClientImpl :
 
   static void incMsgId(size_t& msgId);
 };
-
-}} // facebook::memcache
+}
+} // facebook::memcache
 
 #include "AsyncMcClientImpl-inl.h"

@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -12,30 +12,29 @@
 #include <type_traits>
 #include <utility>
 
-#include <folly/io/IOBuf.h>
 #include <folly/Range.h>
+#include <folly/io/IOBuf.h>
 
 #include "mcrouter/lib/CompressionCodecManager.h"
 #include "mcrouter/lib/debug/ConnectionFifo.h"
-#include "mcrouter/lib/network/CaretReplyConverter.h"
 #include "mcrouter/lib/network/McAsciiParser.h"
 #include "mcrouter/lib/network/McParser.h"
-#include "mcrouter/lib/network/ThriftMessageTraits.h"
+#include "mcrouter/lib/network/ReplyStatsContext.h"
 #include "mcrouter/lib/network/UmbrellaProtocol.h"
 
-namespace facebook { namespace memcache {
-
-class McReply;
+namespace facebook {
+namespace memcache {
 
 template <class Callback>
 class ClientMcParser : private McParser::ParserCallback {
  public:
-  ClientMcParser(Callback& cb,
-                 size_t minBufferSize,
-                 size_t maxBufferSize,
-                 const bool useJemallocNodumpAllocator = false,
-                 const CompressionCodecMap* compressionCodecMap = nullptr,
-                 ConnectionFifo* debugFifo = nullptr);
+  ClientMcParser(
+      Callback& cb,
+      size_t minBufferSize,
+      size_t maxBufferSize,
+      const bool useJemallocNodumpAllocator = false,
+      const CompressionCodecMap* compressionCodecMap = nullptr,
+      ConnectionFifo* debugFifo = nullptr);
 
   /**
    * TAsyncTransport-style getReadBuffer().
@@ -62,15 +61,26 @@ class ClientMcParser : private McParser::ParserCallback {
    * callback. It explicitly tells parser what type of message is expected.
    */
   template <class Request>
-  void expectNext();
+  typename std::enable_if<ListContains<McRequestList, Request>::value>::type
+  expectNext();
+  template <class Request>
+  typename std::enable_if<!ListContains<McRequestList, Request>::value>::type
+  expectNext();
+
+  void setProtocol(mc_protocol_t protocol) {
+    parser_.setProtocol(protocol);
+  }
+
+  double getDropProbability() const;
 
  private:
   McParser parser_;
   McClientAsciiParser asciiParser_;
   void (ClientMcParser<Callback>::*replyForwarder_)(){nullptr};
   void (ClientMcParser<Callback>::*umbrellaOrCaretForwarder_)(
-      const UmbrellaMessageInfo&, const folly::IOBuf&, uint64_t){nullptr};
-  CaretReplyConverter converter_;
+      const UmbrellaMessageInfo&,
+      const folly::IOBuf&,
+      uint64_t){nullptr};
 
   Callback& callback_;
 
@@ -82,37 +92,37 @@ class ClientMcParser : private McParser::ParserCallback {
   void forwardAsciiReply();
 
   template <class Request>
-  void forwardUmbrellaReply(const UmbrellaMessageInfo& info,
-                            const folly::IOBuf& buffer,
-                            uint64_t reqId);
+  void forwardUmbrellaReply(
+      const UmbrellaMessageInfo& info,
+      const folly::IOBuf& buffer,
+      uint64_t reqId);
 
   template <class Request>
-  typename std::enable_if<!IsCustomRequest<Request>::value, void>::type
-  forwardCaretReply(const UmbrellaMessageInfo& headerInfo,
-                    const folly::IOBuf& buffer,
-                    uint64_t reqId);
-
-  template <class Request>
-  typename std::enable_if<IsCustomRequest<Request>::value, void>::type
-  forwardCaretReply(const UmbrellaMessageInfo& headerInfo,
-                    const folly::IOBuf& buffer,
-                    uint64_t reqId);
+  void forwardCaretReply(
+      const UmbrellaMessageInfo& headerInfo,
+      const folly::IOBuf& buffer,
+      uint64_t reqId);
 
   std::unique_ptr<folly::IOBuf> decompress(
       const UmbrellaMessageInfo& headerInfo,
       const folly::IOBuf& buffer);
 
   /* McParser callbacks */
-  bool umMessageReady(const UmbrellaMessageInfo& info,
-                      const folly::IOBuf& buffer) override final;
-  bool caretMessageReady(const UmbrellaMessageInfo& headerInfo,
-                         const folly::IOBuf& buffer) override final;
+  bool umMessageReady(
+      const UmbrellaMessageInfo& info,
+      const folly::IOBuf& buffer) override final;
+  bool caretMessageReady(
+      const UmbrellaMessageInfo& headerInfo,
+      const folly::IOBuf& buffer) override final;
   void handleAscii(folly::IOBuf& readBuffer) override final;
   void parseError(mc_res_t result, folly::StringPiece reason) override final;
 
   bool shouldReadToAsciiBuffer() const;
-};
 
-}}  // facebook::memcache
+  ReplyStatsContext getCompressionStats(
+      const UmbrellaMessageInfo& headerInfo) const;
+};
+}
+} // facebook::memcache
 
 #include "ClientMcParser-inl.h"

@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -12,18 +12,39 @@
 #include <algorithm>
 
 #include <folly/Format.h>
+#include <folly/fibers/FiberManager.h>
 #include <folly/io/IOBuf.h>
 
 namespace facebook {
 namespace memcache {
 
+namespace {
+
+bool isApplicable(const CompressionCodec* codec, const size_t bodySize) {
+  if (codec == nullptr) {
+    return false;
+  }
+  if (!codec->filteringOptions().isEnabled) {
+    return false;
+  }
+  if (bodySize < codec->filteringOptions().minCompressionThreshold ||
+      bodySize > codec->filteringOptions().maxCompressionThreshold) {
+    return false;
+  }
+  return true;
+}
+
+} // anonymous namespace
+
 /***************************
  * CompressionCodecManager *
  ***************************/
 CompressionCodecManager::CompressionCodecManager(
-    std::unordered_map<uint32_t, CodecConfigPtr> codecConfigs) noexcept
-    : codecConfigs_(std::move(codecConfigs)),
-      compressionCodecMap_([this]() { return buildCodecMap(); }) {
+    std::unordered_map<uint32_t, CodecConfigPtr> codecConfigs)
+    : codecConfigs_(std::move(codecConfigs)), compressionCodecMap_([this]() {
+        return folly::fibers::runInMainContext(
+            [this]() { return buildCodecMap(); });
+      }) {
   // Validate all dictionaries
   std::vector<uint32_t> badCodecConfigs;
   int64_t largestId = 0;
@@ -37,7 +58,8 @@ CompressionCodecManager::CompressionCodecManager(
           folly::IOBuf::wrapBuffer(
               config->dictionary.data(), config->dictionary.size()),
           codecId,
-          config->options);
+          config->filteringOptions,
+          config->compressionLevel);
       largestId = std::max<int64_t>(largestId, codecId);
     } catch (const std::exception& e) {
       badCodecConfigs.push_back(codecId);
@@ -50,17 +72,17 @@ CompressionCodecManager::CompressionCodecManager(
 
   if (!codecConfigs_.empty()) {
     // Get the longest contiguous range ending in 'largestId'
-    smallestId_ = 0;
+    smallestCodecId_ = 0;
     for (int64_t i = largestId - 1; i >= 0; --i) {
       const auto& it = codecConfigs_.find(i);
       if (it == codecConfigs_.end()) {
-        smallestId_ = i + 1;
+        smallestCodecId_ = i + 1;
         break;
       }
     }
-    size_ = largestId - smallestId_ + 1;
+    size_ = largestId - smallestCodecId_ + 1;
     LOG(INFO) << "Using " << size_ << " compression codecs (range: ["
-              << smallestId_ << ", " << largestId << "])";
+              << smallestCodecId_ << ", " << largestId << "])";
   } else {
     LOG(WARNING) << "No valid compression codec found. Compression disabled.";
   }
@@ -74,33 +96,45 @@ CompressionCodecMap* CompressionCodecManager::buildCodecMap() {
   if (size_ == 0) {
     return new CompressionCodecMap();
   }
-  return new CompressionCodecMap(codecConfigs_, smallestId_, size_);
+  return new CompressionCodecMap(codecConfigs_, smallestCodecId_, size_);
 }
 
+/****************
+ * CodecIdRange *
+ ****************/
+const CodecIdRange CodecIdRange::Empty = CodecIdRange{1, 0};
 
 /***********************
  * CompressionCodecMap *
  ***********************/
-CompressionCodecMap::CompressionCodecMap() noexcept {
-}
+CompressionCodecMap::CompressionCodecMap() noexcept {}
 
 CompressionCodecMap::CompressionCodecMap(
     const std::unordered_map<uint32_t, CodecConfigPtr>& codecConfigs,
-    uint32_t smallestId, uint32_t size) noexcept
-    : firstId_(smallestId) {
+    uint32_t smallestCodecId,
+    uint32_t size)
+    : firstId_(smallestCodecId) {
   assert(codecConfigs.size() >= size);
 
   codecs_.resize(size);
+  size_t maxTypeId = 0;
   for (uint32_t id = firstId_; id < (firstId_ + size); ++id) {
     const auto& it = codecConfigs.find(id);
-    assert(it != codecConfigs.end());
+    CHECK(it != codecConfigs.end()) << "Dictionary " << id << " is missing!";
     const auto& config = it->second;
+    maxTypeId = std::max(maxTypeId, config->filteringOptions.typeId);
     codecs_[index(id)] = createCompressionCodec(
         config->codecType,
         folly::IOBuf::wrapBuffer(
             config->dictionary.data(), config->dictionary.size()),
         id,
-        config->options);
+        config->filteringOptions,
+        config->compressionLevel);
+  }
+  codecsIdByTypeId_.resize(maxTypeId + 1);
+  for (uint32_t i = 0; i < size; ++i) {
+    codecsIdByTypeId_[codecs_[i]->filteringOptions().typeId].push_back(
+        codecs_[i]->id());
   }
 }
 
@@ -111,19 +145,40 @@ CompressionCodec* CompressionCodecMap::get(uint32_t id) const noexcept {
   return codecs_[index(id)].get();
 }
 
-CompressionCodec* CompressionCodecMap::getBest(
-    const CodecIdRange& codecRange) const noexcept {
+CompressionCodec* CompressionCodecMap::getBestByTypeId(
+    const CodecIdRange& codecRange,
+    const size_t bodySize,
+    const size_t typeId) const noexcept {
+  if (typeId >= codecsIdByTypeId_.size()) {
+    return nullptr;
+  }
   uint32_t lastId = codecRange.firstId + codecRange.size - 1;
-  for (int64_t i = lastId; i >= codecRange.firstId; --i) {
-    if (auto codec = get(i)) {
+  for (int32_t i = codecsIdByTypeId_[typeId].size() - 1; i >= 0; --i) {
+    if (codecsIdByTypeId_[typeId][i] < codecRange.firstId ||
+        codecsIdByTypeId_[typeId][i] > lastId) {
+      continue;
+    }
+    auto codec = get(codecsIdByTypeId_[typeId][i]);
+    if (isApplicable(codec, bodySize)) {
       return codec;
     }
   }
   return nullptr;
 }
 
+CompressionCodec* CompressionCodecMap::getBest(
+    const CodecIdRange& codecRange,
+    const size_t bodySize,
+    const size_t typeId) const noexcept {
+  auto codec = getBestByTypeId(codecRange, bodySize, typeId);
+  if (codec == nullptr) {
+    codec = getBestByTypeId(codecRange, bodySize, 0 /* generic */);
+  }
+  return codec;
+}
+
 uint32_t CompressionCodecMap::index(uint32_t id) const noexcept {
   return id - firstId_;
 }
-}  // memcache
-}  // facebook
+} // memcache
+} // facebook

@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -10,27 +10,26 @@
 #include "ProxyDestinationMap.h"
 
 #include <folly/Format.h>
-#include <folly/io/async/EventBase.h>
 #include <folly/Memory.h>
+#include <folly/io/async/AsyncTimeout.h>
+#include <folly/io/async/EventBase.h>
 
-#include "mcrouter/lib/fbi/asox_timer.h"
+#include "mcrouter/CarbonRouterInstance.h"
+#include "mcrouter/McrouterLogFailure.h"
+#include "mcrouter/ProxyBase.h"
+#include "mcrouter/ProxyDestination.h"
 #include "mcrouter/lib/fbi/cpp/util.h"
 #include "mcrouter/lib/network/AccessPoint.h"
-#include "mcrouter/McrouterInstance.h"
-#include "mcrouter/proxy.h"
-#include "mcrouter/ProxyDestination.h"
 
-namespace facebook { namespace memcache { namespace mcrouter {
+namespace facebook {
+namespace memcache {
+namespace mcrouter {
 
 namespace {
 
-void onResetTimer(const asox_timer_t timer, void* arg) {
-  auto map = reinterpret_cast<ProxyDestinationMap*>(arg);
-  map->resetAllInactive();
-}
-
-std::string genProxyDestinationKey(const AccessPoint& ap,
-                                   std::chrono::milliseconds timeout) {
+std::string genProxyDestinationKey(
+    const AccessPoint& ap,
+    std::chrono::milliseconds timeout) {
   if (ap.getProtocol() == mc_ascii_protocol) {
     // we cannot send requests with different timeouts for ASCII, since
     // it will break in-order nature of the protocol
@@ -43,26 +42,26 @@ std::string genProxyDestinationKey(const AccessPoint& ap,
 } // anonymous
 
 struct ProxyDestinationMap::StateList {
-  using List = folly::IntrusiveList<ProxyDestination,
-                                    &ProxyDestination::stateListHook_>;
+  using List =
+      folly::IntrusiveList<ProxyDestination, &ProxyDestination::stateListHook_>;
   List list;
 };
 
-ProxyDestinationMap::ProxyDestinationMap(proxy_t* proxy)
-  : proxy_(proxy),
-    active_(folly::make_unique<StateList>()),
-    inactive_(folly::make_unique<StateList>()),
-    resetTimer_(nullptr) {
-}
+ProxyDestinationMap::ProxyDestinationMap(ProxyBase* proxy)
+    : proxy_(proxy),
+      active_(folly::make_unique<StateList>()),
+      inactive_(folly::make_unique<StateList>()),
+      inactivityTimeout_(0),
+      resetTimer_(nullptr) {}
 
-std::shared_ptr<ProxyDestination>
-ProxyDestinationMap::emplace(std::shared_ptr<AccessPoint> ap,
-                             std::chrono::milliseconds timeout,
-                             uint64_t qosClass,
-                             uint64_t qosPath) {
+std::shared_ptr<ProxyDestination> ProxyDestinationMap::emplace(
+    std::shared_ptr<AccessPoint> ap,
+    std::chrono::milliseconds timeout,
+    uint64_t qosClass,
+    uint64_t qosPath) {
   auto key = genProxyDestinationKey(*ap, timeout);
-  auto destination = ProxyDestination::create(*proxy_, std::move(ap),
-      timeout, qosClass, qosPath);
+  auto destination = ProxyDestination::create(
+      *proxy_, std::move(ap), timeout, qosClass, qosPath);
   {
     std::lock_guard<std::mutex> lck(destinationsLock_);
     auto destIt = destinations_.emplace(key, destination);
@@ -72,9 +71,9 @@ ProxyDestinationMap::emplace(std::shared_ptr<AccessPoint> ap,
   // Update shared area of ProxyDestinations with same key from different
   // threads. This shared area is represented with TkoTracker class.
   proxy_->router().tkoTrackerMap().updateTracker(
-    *destination,
-    proxy_->router().opts().failures_until_tko,
-    proxy_->router().opts().maximum_soft_tkos);
+      *destination,
+      proxy_->router().opts().failures_until_tko,
+      proxy_->router().opts().maximum_soft_tkos);
 
   return destination;
 }
@@ -84,7 +83,8 @@ ProxyDestinationMap::emplace(std::shared_ptr<AccessPoint> ap,
  * otherwise, returns nullptr.
  */
 std::shared_ptr<ProxyDestination> ProxyDestinationMap::find(
-    const AccessPoint& ap, std::chrono::milliseconds timeout) const {
+    const AccessPoint& ap,
+    std::chrono::milliseconds timeout) const {
   auto key = genProxyDestinationKey(ap, timeout);
   {
     std::lock_guard<std::mutex> lck(destinationsLock_);
@@ -93,8 +93,8 @@ std::shared_ptr<ProxyDestination> ProxyDestinationMap::find(
 }
 
 // Note: caller must be holding destionationsLock_.
-std::shared_ptr<ProxyDestination>
-ProxyDestinationMap::find(const std::string& key) const {
+std::shared_ptr<ProxyDestination> ProxyDestinationMap::find(
+    const std::string& key) const {
   auto it = destinations_.find(key);
   if (it == destinations_.end()) {
     return nullptr;
@@ -135,16 +135,34 @@ void ProxyDestinationMap::resetAllInactive() {
 }
 
 void ProxyDestinationMap::setResetTimer(std::chrono::milliseconds interval) {
-  assert(interval.count() > 0);
-  auto delay = to<timeval_t>(interval);
-  resetTimer_ = asox_add_timer(proxy_->eventBase().getLibeventBase(), delay,
-                               onResetTimer, this);
-}
+  using TimerType = AsyncTimer<ProxyDestinationMap>;
 
-ProxyDestinationMap::~ProxyDestinationMap() {
-  if (resetTimer_ != nullptr) {
-    asox_remove_timer(resetTimer_);
+  assert(interval.count() > 0);
+  inactivityTimeout_ = static_cast<uint32_t>(interval.count());
+  resetTimer_ = folly::make_unique<TimerType>(*this);
+
+  resetTimer_->attachEventBase(std::addressof(proxy_->eventBase()));
+  if (!resetTimer_->scheduleTimeout(inactivityTimeout_)) {
+    MC_LOG_FAILURE(
+        proxy_->router().opts(),
+        memcache::failure::Category::kSystemError,
+        "failed to schedule inactivity timer");
   }
 }
 
-}}} // facebook::memcache::mcrouter
+void ProxyDestinationMap::timerCallback() {
+  resetAllInactive();
+
+  assert(inactivityTimeout_ > 0);
+  if (!resetTimer_->scheduleTimeout(inactivityTimeout_)) {
+    MC_LOG_FAILURE(
+        proxy_->router().opts(),
+        memcache::failure::Category::kSystemError,
+        "failed to re-schedule inactivity timer");
+  }
+}
+
+ProxyDestinationMap::~ProxyDestinationMap() {}
+}
+}
+} // facebook::memcache::mcrouter

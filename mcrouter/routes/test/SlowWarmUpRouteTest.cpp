@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -12,11 +12,11 @@
 
 #include <gtest/gtest.h>
 
-#include "mcrouter/lib/network/TypedThriftMessage.h"
-#include "mcrouter/lib/network/gen-cpp2/mc_caret_protocol_types.h"
+#include "mcrouter/McrouterInstance.h"
+#include "mcrouter/lib/network/gen/Memcache.h"
 #include "mcrouter/lib/test/RouteHandleTestUtil.h"
 #include "mcrouter/lib/test/TestRouteHandle.h"
-#include "mcrouter/McrouterInstance.h"
+#include "mcrouter/routes/McrouterRouteHandle.h"
 #include "mcrouter/routes/SlowWarmUpRoute.h"
 
 using namespace facebook::memcache;
@@ -26,22 +26,28 @@ using TestHandle = TestHandleImpl<TestRouteHandleIf>;
 
 namespace {
 
+using FiberManagerContextTag =
+    typename fiber_local<MemcacheRouterInfo>::ContextTypeTag;
+
 McrouterInstance* getRouter() {
   McrouterOptions opts = defaultTestOptions();
   opts.config = "{ \"route\": \"NullRoute\" }";
   return McrouterInstance::init("test_shadow", opts);
 }
 
-std::shared_ptr<ProxyRequestContext> getContext() {
-  return ProxyRequestContext::createRecording(*getRouter()->getProxy(0),
-                                              nullptr);
+std::shared_ptr<ProxyRequestContextWithInfo<MemcacheRouterInfo>> getContext() {
+  return ProxyRequestContextWithInfo<MemcacheRouterInfo>::createRecording(
+      *getRouter()->getProxy(0), nullptr);
 }
 
-void sendWorkload(TestRouteHandle<SlowWarmUpRoute<TestRouteHandleIf>>& rh,
-                  size_t numReqs, size_t& numNormal, size_t& numFailover) {
+void sendWorkload(
+    TestRouteHandle<SlowWarmUpRoute<TestRouterInfo>>& rh,
+    size_t numReqs,
+    size_t& numNormal,
+    size_t& numFailover) {
   for (size_t i = 0; i < numReqs; ++i) {
-    auto reply = rh.route(TypedThriftRequest<cpp2::McGetRequest>("0"));
-    auto val = reply.valueRangeSlow().str();
+    auto reply = rh.route(McGetRequest("0"));
+    auto val = carbon::valueRangeSlow(reply).str();
     if (val == "a") { // normal
       ++numNormal;
     } else if (val == "b") { // failover
@@ -54,42 +60,42 @@ void sendWorkload(TestRouteHandle<SlowWarmUpRoute<TestRouteHandleIf>>& rh,
 
 TEST(SlowWarmUpRoute, basic) {
   auto settings = std::make_shared<SlowWarmUpRouteSettings>(
-      /* enable */    0.5,
-      /* disable */   0.9,
-      /* start */     0.1,
-      /* step */      1.0,
-      /* numReqs  */  5);
+      /* enable */ 0.5,
+      /* disable */ 0.9,
+      /* start */ 0.1,
+      /* step */ 1.0,
+      /* numReqs  */ 5);
 
-  TestFiberManager fm{fiber_local::ContextTypeTag()};
+  TestFiberManager fm{FiberManagerContextTag()};
 
   std::vector<std::shared_ptr<TestHandle>> targets{
-    std::make_shared<TestHandle>(GetRouteTestData(mc_res_found, "a"),
-                                 UpdateRouteTestData(mc_res_stored),
-                                 DeleteRouteTestData(mc_res_notfound)),
-    std::make_shared<TestHandle>(GetRouteTestData(mc_res_found, "b"),
-                                 UpdateRouteTestData(mc_res_stored),
-                                 DeleteRouteTestData(mc_res_notfound)),
+      std::make_shared<TestHandle>(
+          GetRouteTestData(mc_res_found, "a"),
+          UpdateRouteTestData(mc_res_stored),
+          DeleteRouteTestData(mc_res_notfound)),
+      std::make_shared<TestHandle>(
+          GetRouteTestData(mc_res_found, "b"),
+          UpdateRouteTestData(mc_res_stored),
+          DeleteRouteTestData(mc_res_notfound)),
   };
   auto target = get_route_handles(targets)[0];
   auto failoverTarget = get_route_handles(targets)[1];
 
   auto ctx = getContext();
   fm.run([&]() {
-    fiber_local::setSharedCtx(ctx);
-    TestRouteHandle<SlowWarmUpRoute<TestRouteHandleIf>> rh(
-        std::move(target),
-        std::move(failoverTarget),
-        std::move(settings));
+    fiber_local<MemcacheRouterInfo>::setSharedCtx(ctx);
+    TestRouteHandle<SlowWarmUpRoute<TestRouterInfo>> rh(
+        std::move(target), std::move(failoverTarget), std::move(settings));
 
     // send 10 gets -> moves hit rate to 1.
     for (int i = 0; i < 10; ++i) {
-      auto reply = rh.route(TypedThriftRequest<cpp2::McGetRequest>("0"));
-      EXPECT_EQ("a", reply.valueRangeSlow().str());
+      auto reply = rh.route(McGetRequest("0"));
+      EXPECT_EQ("a", carbon::valueRangeSlow(reply).str());
     }
 
     // send 90 deletes (which return miss) -> moves hit rate to 0.1
     for (int i = 0; i < 90; ++i) {
-      auto reply = rh.route(TypedThriftRequest<cpp2::McDeleteRequest>("0"));
+      auto reply = rh.route(McDeleteRequest("0"));
       EXPECT_EQ(mc_res_notfound, reply.result());
     }
 
@@ -103,7 +109,7 @@ TEST(SlowWarmUpRoute, basic) {
 
     // send a large amount of gets -> move hit rate up, but not above 0.9
     for (int i = 0; i < 1000; ++i) {
-      auto reply = rh.route(TypedThriftRequest<cpp2::McGetRequest>("0"));
+      auto reply = rh.route(McGetRequest("0"));
     }
 
     // send 1000 gets (round 2) -> must have more normal results than 1st round
@@ -117,56 +123,56 @@ TEST(SlowWarmUpRoute, basic) {
 
     // send a large amount of gets -> move hit rate above 0.9
     for (int i = 0; i < 50000; ++i) {
-      auto reply = rh.route(TypedThriftRequest<cpp2::McGetRequest>("0"));
+      auto reply = rh.route(McGetRequest("0"));
     }
 
     // send 10 gets -> we should have moved out of the "warming up" state.
     for (int i = 0; i < 10; ++i) {
-      auto reply = rh.route(TypedThriftRequest<cpp2::McGetRequest>("0"));
-      EXPECT_EQ("a", reply.valueRangeSlow().str());
+      auto reply = rh.route(McGetRequest("0"));
+      EXPECT_EQ("a", carbon::valueRangeSlow(reply).str());
     }
   });
 }
 
 TEST(SlowWarmUpRoute, minRequests) {
   auto settings = std::make_shared<SlowWarmUpRouteSettings>(
-      /* enable */    0.5,
-      /* disable */   0.9,
-      /* start */     0.1,
-      /* step */      1.0,
-      /* numReqs  */  100);
+      /* enable */ 0.5,
+      /* disable */ 0.9,
+      /* start */ 0.1,
+      /* step */ 1.0,
+      /* numReqs  */ 100);
 
-  TestFiberManager fm{fiber_local::ContextTypeTag()};
+  TestFiberManager fm{FiberManagerContextTag()};
 
   std::vector<std::shared_ptr<TestHandle>> targets{
-    std::make_shared<TestHandle>(GetRouteTestData(mc_res_found, "a"),
-                                 UpdateRouteTestData(mc_res_stored),
-                                 DeleteRouteTestData(mc_res_notfound)),
-    std::make_shared<TestHandle>(GetRouteTestData(mc_res_found, "b"),
-                                 UpdateRouteTestData(mc_res_stored),
-                                 DeleteRouteTestData(mc_res_notfound)),
+      std::make_shared<TestHandle>(
+          GetRouteTestData(mc_res_found, "a"),
+          UpdateRouteTestData(mc_res_stored),
+          DeleteRouteTestData(mc_res_notfound)),
+      std::make_shared<TestHandle>(
+          GetRouteTestData(mc_res_found, "b"),
+          UpdateRouteTestData(mc_res_stored),
+          DeleteRouteTestData(mc_res_notfound)),
   };
   auto target = get_route_handles(targets)[0];
   auto failoverTarget = get_route_handles(targets)[1];
 
   auto ctx = getContext();
   fm.run([&]() {
-    fiber_local::setSharedCtx(ctx);
-    TestRouteHandle<SlowWarmUpRoute<TestRouteHandleIf>> rh(
-        std::move(target),
-        std::move(failoverTarget),
-        std::move(settings));
+    fiber_local<MemcacheRouterInfo>::setSharedCtx(ctx);
+    TestRouteHandle<SlowWarmUpRoute<TestRouterInfo>> rh(
+        std::move(target), std::move(failoverTarget), std::move(settings));
 
     // send 90 deletes (which return miss) -> hit rate is 0.
     for (int i = 0; i < 90; ++i) {
-      auto reply = rh.route(TypedThriftRequest<cpp2::McDeleteRequest>("0"));
+      auto reply = rh.route(McDeleteRequest("0"));
       EXPECT_EQ(mc_res_notfound, reply.result());
     }
 
     // as we have not reached minReqs yet (100), use always normal target.
     for (int i = 0; i < 10; ++i) {
-      auto reply = rh.route(TypedThriftRequest<cpp2::McGetRequest>("0"));
-      EXPECT_EQ("a", reply.valueRangeSlow().str());
+      auto reply = rh.route(McGetRequest("0"));
+      EXPECT_EQ("a", carbon::valueRangeSlow(reply).str());
     }
 
     // now that we have achieved minReqs, receive some failovers.

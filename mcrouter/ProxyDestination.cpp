@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -9,22 +9,28 @@
  */
 #include "ProxyDestination.h"
 
-#include <folly/experimental/fibers/Fiber.h>
-#include <folly/Memory.h>
+#include <limits>
+#include <random>
 
+#include <folly/Memory.h>
+#include <folly/fibers/Fiber.h>
+
+#include "mcrouter/McrouterLogFailure.h"
+#include "mcrouter/OptionsUtil.h"
+#include "mcrouter/TkoTracker.h"
 #include "mcrouter/config-impl.h"
 #include "mcrouter/config.h"
-#include "mcrouter/lib/fbi/asox_timer.h"
-#include "mcrouter/lib/McRequest.h"
 #include "mcrouter/lib/McResUtil.h"
+#include "mcrouter/lib/cycles/Clocks.h"
 #include "mcrouter/lib/network/AsyncMcClient.h"
+#include "mcrouter/lib/network/ReplyStatsContext.h"
 #include "mcrouter/lib/network/ThreadLocalSSLContextProvider.h"
-#include "mcrouter/OptionsUtil.h"
 #include "mcrouter/routes/DestinationRoute.h"
 #include "mcrouter/stats.h"
-#include "mcrouter/TkoTracker.h"
 
-namespace facebook { namespace memcache { namespace mcrouter {
+namespace facebook {
+namespace memcache {
+namespace mcrouter {
 
 namespace {
 
@@ -32,9 +38,13 @@ constexpr double kProbeExponentialFactor = 1.5;
 constexpr double kProbeJitterMin = 0.05;
 constexpr double kProbeJitterMax = 0.5;
 constexpr double kProbeJitterDelta = kProbeJitterMax - kProbeJitterMin;
+// Jitters for closing rxmiting connections will be between 1 and
+// kReconnectionHoldoffFactor.
+constexpr uint32_t kReconnectionHoldoffFactor = 25;
 
-static_assert(kProbeJitterMax >= kProbeJitterMin,
-              "ProbeJitterMax should be greater or equal tham ProbeJitterMin");
+static_assert(
+    kProbeJitterMax >= kProbeJitterMin,
+    "ProbeJitterMax should be greater or equal tham ProbeJitterMin");
 
 stat_name_t getStatName(ProxyDestination::State st) {
   switch (st) {
@@ -52,7 +62,7 @@ stat_name_t getStatName(ProxyDestination::State st) {
   return num_stats; // shouldn't reach here
 }
 
-}  // anonymous namespace
+} // anonymous namespace
 
 void ProxyDestination::schedule_next_probe() {
   assert(!proxy->router().opts().disable_tko_tracking);
@@ -71,42 +81,32 @@ void ProxyDestination::schedule_next_probe() {
   // Calculate random jitter
   double r = (double)rand() / (double)RAND_MAX;
   double tmo_jitter_pct = r * kProbeJitterDelta + kProbeJitterMin;
-  uint64_t delay_us = (double)delay_ms * 1000 * (1.0 + tmo_jitter_pct);
-  assert(delay_us > 0);
+  delay_ms = (double)delay_ms * (1.0 + tmo_jitter_pct);
+  assert(delay_ms > 0);
 
-  timeval_t delay;
-  delay.tv_sec = (delay_us / 1000000);
-  delay.tv_usec = (delay_us % 1000000);
-
-  assert(probe_timer == nullptr);
-  probe_timer = asox_add_timer(
-    proxy->eventBase().getLibeventBase(),
-    delay,
-    [](const asox_timer_t timer, void* arg) {
-      reinterpret_cast<ProxyDestination*>(arg)->on_timer(timer);
-    }, this);
+  if (!probeTimer_.scheduleTimeout(delay_ms)) {
+    MC_LOG_FAILURE(
+        proxy->router().opts(),
+        memcache::failure::Category::kSystemError,
+        "failed to schedule probe timer for ProxyDestination");
+  }
 }
 
-void ProxyDestination::on_timer(const asox_timer_t timer) {
-  // This assert checks for use-after-free
-  assert(timer == probe_timer);
-  asox_remove_timer(timer);
-  probe_timer = nullptr;
+void ProxyDestination::timerCallback() {
   // Note that the previous probe might still be in flight
   if (!probe_req) {
-    probe_req = folly::make_unique<McRequestWithMcOp<mc_op_version>>();
+    probe_req = folly::make_unique<McVersionRequest>();
     ++stats_.probesSent;
     auto selfPtr = selfPtr_;
-    proxy->fiberManager.addTask([selfPtr]() mutable {
+    proxy->fiberManager().addTask([selfPtr]() mutable {
       auto pdstn = selfPtr.lock();
       if (pdstn == nullptr) {
         return;
       }
-      pdstn->proxy->destinationMap->markAsActive(*pdstn);
+      pdstn->proxy->destinationMap()->markAsActive(*pdstn);
       // will reconnect if connection was closed
       auto reply = pdstn->getAsyncMcClient().sendSync(
-        *pdstn->probe_req,
-        pdstn->shortestTimeout_);
+          *pdstn->probe_req, pdstn->shortestTimeout_);
       pdstn->handle_tko(reply.result(), true);
       pdstn->probe_req.reset();
     });
@@ -116,15 +116,19 @@ void ProxyDestination::on_timer(const asox_timer_t timer) {
 
 void ProxyDestination::start_sending_probes() {
   probe_delay_next_ms = proxy->router().opts().probe_delay_initial_ms;
+  probeTimer_.attachEventBase(std::addressof(proxy->eventBase()));
   schedule_next_probe();
 }
 
 void ProxyDestination::stop_sending_probes() {
   stats_.probesSent = 0;
-  if (probe_timer) {
-    asox_remove_timer(probe_timer);
-    probe_timer = nullptr;
-  }
+
+  // Cancel timeout before calling detachEventBase to prevent an assert failure.
+  probeTimer_.cancelTimeout();
+
+  // Need to detach event base here. Otherwise attachEventBase on next call to
+  // start_sending_probes will assert(false).
+  probeTimer_.detachEventBase();
 }
 
 void ProxyDestination::handle_tko(const mc_res_t result, bool is_probe_req) {
@@ -158,8 +162,68 @@ void ProxyDestination::handle_tko(const mc_res_t result, bool is_probe_req) {
   tracker->recordSuccess(this);
 }
 
-void ProxyDestination::onReply(const mc_res_t result,
-                               DestinationRequestCtx& destreqCtx) {
+void ProxyDestination::handleRxmittingConnection() {
+  if (!client_) {
+    return;
+  }
+  const auto retransCycles =
+      proxy->router().opts().collect_rxmit_stats_every_hz;
+  if (retransCycles > 0) {
+    const auto curCycles = cycles::getCpuCycles();
+    if (curCycles > lastRetransCycles_ + retransCycles) {
+      lastRetransCycles_ = curCycles;
+      const auto currRetransPerKByte = client_->getRetransmissionInfo();
+      if (currRetransPerKByte >= 0.0) {
+        stats_.retransPerKByte = currRetransPerKByte;
+        proxy->stats().setValue(
+            retrans_per_kbyte_max_stat,
+            std::max(
+                proxy->stats().getValue(retrans_per_kbyte_max_stat),
+                static_cast<uint64_t>(currRetransPerKByte)));
+        proxy->stats().increment(
+            retrans_per_kbyte_sum_stat,
+            static_cast<int64_t>(currRetransPerKByte));
+        proxy->stats().increment(retrans_num_total_stat);
+      }
+
+      if (proxy->router().isRxmitReconnectionDisabled()) {
+        return;
+      }
+
+      if (rxmitsToCloseConnection_ > 0 &&
+          currRetransPerKByte >= rxmitsToCloseConnection_) {
+        std::uniform_int_distribution<uint64_t> dist(
+            1, kReconnectionHoldoffFactor);
+        const uint64_t reconnectionJitters =
+            retransCycles * dist(proxy->randomGenerator());
+        if (lastConnCloseCycles_ + reconnectionJitters > curCycles) {
+          return;
+        }
+        client_->closeNow();
+        proxy->stats().increment(retrans_closed_connections_stat);
+        lastConnCloseCycles_ = curCycles;
+
+        const auto maxThreshold =
+            proxy->router().opts().max_rxmit_reconnect_threshold;
+        const uint64_t maxRxmitReconnThreshold = maxThreshold == 0
+            ? std::numeric_limits<uint64_t>::max()
+            : maxThreshold;
+        rxmitsToCloseConnection_ =
+            std::min(maxRxmitReconnThreshold, 2 * rxmitsToCloseConnection_);
+      } else if (3 * currRetransPerKByte < rxmitsToCloseConnection_) {
+        const auto minThreshold =
+            proxy->router().opts().min_rxmit_reconnect_threshold;
+        rxmitsToCloseConnection_ =
+            std::max(minThreshold, rxmitsToCloseConnection_ / 2);
+      }
+    }
+  }
+}
+
+void ProxyDestination::onReply(
+    const mc_res_t result,
+    DestinationRequestCtx& destreqCtx,
+    const ReplyStatsContext& replyStatsContext) {
   handle_tko(result, false);
 
   if (!stats_.results) {
@@ -170,6 +234,22 @@ void ProxyDestination::onReply(const mc_res_t result,
 
   int64_t latency = destreqCtx.endTime - destreqCtx.startTime;
   stats_.avgLatency.insertSample(latency);
+
+  if (accessPoint_->compressed()) {
+    if (replyStatsContext.usedCodecId > 0) {
+      proxy->stats().increment(replies_compressed_stat);
+    } else {
+      proxy->stats().increment(replies_not_compressed_stat);
+    }
+    proxy->stats().increment(
+        reply_traffic_before_compression_stat,
+        replyStatsContext.replySizeBeforeCompression);
+    proxy->stats().increment(
+        reply_traffic_after_compression_stat,
+        replyStatsContext.replySizeAfterCompression);
+  }
+
+  handleRxmittingConnection();
 }
 
 size_t ProxyDestination::getPendingRequestCount() const {
@@ -183,18 +263,13 @@ size_t ProxyDestination::getInflightRequestCount() const {
 }
 
 std::shared_ptr<ProxyDestination> ProxyDestination::create(
-    proxy_t& proxy,
+    ProxyBase& proxy,
     std::shared_ptr<AccessPoint> ap,
     std::chrono::milliseconds timeout,
     uint64_t qosClass,
     uint64_t qosPath) {
-
-  std::shared_ptr<ProxyDestination> ptr(new ProxyDestination(
-    proxy,
-    std::move(ap),
-    timeout,
-    qosClass,
-    qosPath));
+  std::shared_ptr<ProxyDestination> ptr(
+      new ProxyDestination(proxy, std::move(ap), timeout, qosClass, qosPath));
   ptr->selfPtr_ = ptr;
   return ptr;
 }
@@ -205,8 +280,9 @@ ProxyDestination::~ProxyDestination() {
     stop_sending_probes();
   }
 
-  if (proxy->destinationMap) {
-    proxy->destinationMap->removeDestination(*this);
+  if (proxy->destinationMap()) {
+    // Only remove if we are not shutting down Proxy.
+    proxy->destinationMap()->removeDestination(*this);
   }
 
   if (client_) {
@@ -214,27 +290,29 @@ ProxyDestination::~ProxyDestination() {
     client_->closeNow();
   }
 
-  stat_decr(proxy->stats, getStatName(stats_.state), 1);
-  stat_decr(proxy->stats, num_servers_stat, 1);
+  proxy->stats().decrement(getStatName(stats_.state));
+  proxy->stats().decrement(num_servers_stat);
   magic_ = kDeadBeef;
 }
 
 ProxyDestination::ProxyDestination(
-  proxy_t& proxy_,
-  std::shared_ptr<AccessPoint> ap,
-  std::chrono::milliseconds timeout,
-  uint64_t qosClass,
-  uint64_t qosPath)
+    ProxyBase& proxy_,
+    std::shared_ptr<AccessPoint> ap,
+    std::chrono::milliseconds timeout,
+    uint64_t qosClass,
+    uint64_t qosPath)
     : proxy(&proxy_),
       accessPoint_(std::move(ap)),
       shortestTimeout_(timeout),
       qosClass_(qosClass),
-      qosPath_(qosPath) {
-
+      qosPath_(qosPath),
+      rxmitsToCloseConnection_(
+          proxy->router().opts().min_rxmit_reconnect_threshold),
+      probeTimer_(*this) {
   static uint64_t next_magic = 0x12345678900000LL;
   magic_ = __sync_fetch_and_add(&next_magic, 1);
-  stat_incr(proxy->stats, num_servers_new_stat, 1);
-  stat_incr(proxy->stats, num_servers_stat, 1);
+  proxy->stats().increment(num_servers_new_stat);
+  proxy->stats().increment(num_servers_stat);
 }
 
 bool ProxyDestination::may_send() const {
@@ -273,72 +351,68 @@ void ProxyDestination::initializeAsyncMcClient() {
     options.qosPath = qosPath_;
   }
   options.useJemallocNodumpAllocator = opts.jemalloc_nodump_buffers;
-  if (auto codecManager = proxy->router().getCodecManager()) {
-    options.compressionCodecMap = codecManager->getCodecMap();
+  if (accessPoint_->compressed()) {
+    if (auto codecManager = proxy->router().getCodecManager()) {
+      options.compressionCodecMap = codecManager->getCodecMap();
+    }
   }
 
   if (accessPoint_->useSsl()) {
-    checkLogic(!opts.pem_cert_path.empty() &&
-               !opts.pem_key_path.empty() &&
-               !opts.pem_ca_path.empty(),
-               "Some of ssl key paths are not set!");
+    checkLogic(
+        !opts.pem_cert_path.empty() && !opts.pem_key_path.empty() &&
+            !opts.pem_ca_path.empty(),
+        "Some of ssl key paths are not set!");
     options.sslContextProvider = [&opts] {
-      return getSSLContext(opts.pem_cert_path, opts.pem_key_path,
-                           opts.pem_ca_path);
+      return getSSLContext(
+          opts.pem_cert_path, opts.pem_key_path, opts.pem_ca_path);
     };
   }
 
-  auto client = folly::make_unique<AsyncMcClient>(proxy->eventBase(),
-                                                  std::move(options));
+  auto client =
+      folly::make_unique<AsyncMcClient>(proxy->eventBase(), std::move(options));
   {
     folly::SpinLockGuard g(clientLock_);
     client_ = std::move(client);
   }
 
   client_->setRequestStatusCallbacks(
-    [this](int pending, int inflight) {
-      if (pending != 0) {
-        stat_incr(proxy->stats, destination_pending_reqs_stat, pending);
-        stat_set_uint64(
-            proxy->stats,
-            destination_max_pending_reqs_stat,
-            std::max(stat_get_uint64(proxy->stats,
-                                     destination_max_pending_reqs_stat),
-                     stat_get_uint64(proxy->stats,
-                                     destination_pending_reqs_stat)));
-      }
-      if (inflight != 0) {
-        stat_incr(proxy->stats, destination_inflight_reqs_stat, inflight);
-        stat_set_uint64(
-            proxy->stats,
-            destination_max_inflight_reqs_stat,
-            std::max(stat_get_uint64(proxy->stats,
-                                     destination_max_inflight_reqs_stat),
-                     stat_get_uint64(proxy->stats,
-                                     destination_inflight_reqs_stat)));
-      }
-    },
-    [this](size_t numToSend) {
-      stat_incr(proxy->stats, destination_batches_sum_stat, 1);
-      stat_incr(proxy->stats, destination_requests_sum_stat, numToSend);
-    });
+      [this](int pending, int inflight) {
+        if (pending != 0) {
+          proxy->stats().increment(destination_pending_reqs_stat, pending);
+          proxy->stats().setValue(
+              destination_max_pending_reqs_stat,
+              std::max(
+                  proxy->stats().getValue(destination_max_pending_reqs_stat),
+                  proxy->stats().getValue(destination_pending_reqs_stat)));
+        }
+        if (inflight != 0) {
+          proxy->stats().increment(destination_inflight_reqs_stat, inflight);
+          proxy->stats().setValue(
+              destination_max_inflight_reqs_stat,
+              std::max(
+                  proxy->stats().getValue(destination_max_inflight_reqs_stat),
+                  proxy->stats().getValue(destination_inflight_reqs_stat)));
+        }
+      },
+      [this](size_t numToSend) {
+        proxy->stats().increment(destination_batches_sum_stat);
+        proxy->stats().increment(destination_requests_sum_stat, numToSend);
+      });
 
   client_->setStatusCallbacks(
-    [this] () mutable {
-      setState(State::kUp);
-    },
-    [this] (bool aborting) mutable {
-      if (aborting) {
-        setState(State::kClosed);
-      } else {
-        setState(State::kDown);
-        handle_tko(mc_res_connect_error, /* is_probe_req= */ false);
-      }
-    });
+      [this]() mutable { setState(State::kUp); },
+      [this](bool aborting) mutable {
+        if (aborting) {
+          setState(State::kClosed);
+        } else {
+          setState(State::kDown);
+          handle_tko(mc_res_connect_error, /* is_probe_req= */ false);
+        }
+      });
 
   if (opts.target_max_inflight_requests > 0) {
-    client_->setThrottle(opts.target_max_inflight_requests,
-                         opts.target_max_pending_requests);
+    client_->setThrottle(
+        opts.target_max_inflight_requests, opts.target_max_pending_requests);
   }
 }
 
@@ -352,10 +426,10 @@ AsyncMcClient& ProxyDestination::getAsyncMcClient() {
 void ProxyDestination::onTkoEvent(TkoLogEvent event, mc_res_t result) const {
   auto logUtil = [this, result](folly::StringPiece eventStr) {
     VLOG(1) << accessPoint_->toHostPortString() << " (" << poolName_ << ") "
-            << eventStr << ". Total hard TKOs: "
-            << tracker->globalTkos().hardTkos << "; soft TKOs: "
-            << tracker->globalTkos().softTkos << ". Reply: "
-            << mc_res_to_string(result);
+            << eventStr
+            << ". Total hard TKOs: " << tracker->globalTkos().hardTkos
+            << "; soft TKOs: " << tracker->globalTkos().softTkos
+            << ". Reply: " << mc_res_to_string(result);
   };
 
   switch (event) {
@@ -391,15 +465,15 @@ void ProxyDestination::setState(State new_st) {
   }
 
   auto logUtil = [this](const char* s) {
-    VLOG(1) << "server " << pdstnKey_ << " " << s << " (" <<
-        stat_get_uint64(proxy->stats, num_servers_up_stat) << " of " <<
-        stat_get_uint64(proxy->stats, num_servers_stat) << ")";
+    VLOG(1) << "server " << pdstnKey_ << " " << s << " ("
+            << proxy->stats().getValue(num_servers_up_stat) << " of "
+            << proxy->stats().getValue(num_servers_stat) << ")";
   };
 
   auto old_name = getStatName(stats_.state);
   auto new_name = getStatName(new_st);
-  stat_decr(proxy->stats, old_name, 1);
-  stat_incr(proxy->stats, new_name, 1);
+  proxy->stats().decrement(old_name);
+  proxy->stats().increment(new_name);
   stats_.state = new_st;
 
   switch (stats_.state) {
@@ -431,5 +505,6 @@ void ProxyDestination::updateShortestTimeout(
     }
   }
 }
-
-}}}  // facebook::memcache::mcrouter
+}
+}
+} // facebook::memcache::mcrouter

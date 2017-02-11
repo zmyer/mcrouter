@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -9,12 +9,11 @@
  */
 #include "IOBufUtil.h"
 
-#include <folly/io/IOBuf.h>
 #include <folly/Range.h>
+#include <folly/io/IOBuf.h>
 
-#include "mcrouter/lib/McMsgRef.h"
-
-namespace facebook { namespace memcache {
+namespace facebook {
+namespace memcache {
 
 folly::StringPiece getRange(const std::unique_ptr<folly::IOBuf>& buf) {
   if (!buf) {
@@ -41,73 +40,21 @@ folly::StringPiece coalesceAndGetRange(folly::IOBuf& buf) {
   return getRange(buf);
 }
 
-template <nstring_t mc_msg_t::* F>
-std::unique_ptr<folly::IOBuf> makeMsgIOBufHelper(const McMsgRef& msgRef,
-                                                 bool returnEmpty) {
-  if (!msgRef.get()) {
-    return returnEmpty ? folly::IOBuf::create(0) : nullptr;
-  }
-  auto msg = const_cast<mc_msg_t*>(msgRef.get());
-  if (!(msg->*F).len) {
-    return returnEmpty ? folly::IOBuf::create(0) : nullptr;
-  }
-  return folly::IOBuf::takeOwnership(
-    (msg->*F).str, (msg->*F).len, (msg->*F).len,
-    [] (void* buf, void* ctx) {
-      auto m = reinterpret_cast<mc_msg_t*>(ctx);
-      mc_msg_decref(m);
-    },
-    mc_msg_incref(msg));
-}
-
-template <nstring_t mc_msg_t::* F>
-folly::IOBuf makeMsgIOBufStackHelper(const McMsgRef& msgRef) {
-  if (!msgRef.get()) {
-    return {};
-  }
-  auto msg = const_cast<mc_msg_t*>(msgRef.get());
-  if (!(msg->*F).len) {
-    return {};
-  }
-  return folly::IOBuf(
-    folly::IOBuf::TAKE_OWNERSHIP,
-    (msg->*F).str, (msg->*F).len, (msg->*F).len,
-    [] (void* buf, void* ctx) {
-      auto m = reinterpret_cast<mc_msg_t*>(ctx);
-      mc_msg_decref(m);
-    },
-    mc_msg_incref(msg));
-}
-
-std::unique_ptr<folly::IOBuf> makeMsgKeyIOBuf(const McMsgRef& msgRef,
-                                              bool returnEmpty) {
-  return makeMsgIOBufHelper<&mc_msg_t::key>(msgRef, returnEmpty);
-}
-
-std::unique_ptr<folly::IOBuf> makeMsgValueIOBuf(const McMsgRef& msgRef,
-                                                bool returnEmpty) {
-  return makeMsgIOBufHelper<&mc_msg_t::value>(msgRef, returnEmpty);
-}
-
-folly::IOBuf makeMsgKeyIOBufStack(const McMsgRef& msgRef) {
-  return makeMsgIOBufStackHelper<&mc_msg_t::key>(msgRef);
-}
-
-folly::IOBuf makeMsgValueIOBufStack(const McMsgRef& msgRef) {
-  return makeMsgIOBufStackHelper<&mc_msg_t::value>(msgRef);
+folly::StringPiece coalesceAndGetRange(folly::Optional<folly::IOBuf>& buf) {
+  return buf.hasValue() ? coalesceAndGetRange(*buf) : folly::StringPiece();
 }
 
 bool hasSameMemoryRegion(const folly::IOBuf& buf, folly::StringPiece range) {
   return !buf.isChained() &&
-    (buf.length() == 0 ||
-     (range.begin() == reinterpret_cast<const char*>(buf.data()) &&
-      range.size() == buf.length()));
+      (buf.length() == 0 ||
+       (range.begin() == reinterpret_cast<const char*>(buf.data()) &&
+        range.size() == buf.length()));
 }
 
 bool hasSameMemoryRegion(const folly::IOBuf& a, const folly::IOBuf& b) {
   return !a.isChained() && !b.isChained() &&
-    ((a.length() == 0 && b.length() == 0) ||
-     (a.data() == b.data() && a.length() == b.length()));
+      ((a.length() == 0 && b.length() == 0) ||
+       (a.data() == b.data() && a.length() == b.length()));
 }
 
 void copyInto(char* raw, const folly::IOBuf& buf) {
@@ -121,4 +68,29 @@ void copyInto(char* raw, const folly::IOBuf& buf) {
   } while (cur != &buf);
 }
 
-}} // facebook::memcache
+namespace {
+/**
+ * Creating IOBuf from an iovec array.
+ */
+folly::IOBuf
+coalesceSlow(const struct iovec* iov, size_t iovcnt, size_t destCapacity) {
+  folly::IOBuf buffer(folly::IOBuf::CREATE, destCapacity);
+  for (size_t i = 0; i < iovcnt; ++i) {
+    std::memcpy(buffer.writableTail(), iov[i].iov_base, iov[i].iov_len);
+    buffer.append(iov[i].iov_len);
+  }
+  assert(buffer.length() <= destCapacity);
+  return buffer;
+}
+} // anonymous namespace
+
+folly::IOBuf
+coalesceIovecs(const struct iovec* iov, size_t iovcnt, size_t destCapacity) {
+  if (iovcnt == 1) {
+    return folly::IOBuf(
+        folly::IOBuf::WRAP_BUFFER, iov[0].iov_base, iov[0].iov_len);
+  }
+  return coalesceSlow(iov, iovcnt, destCapacity);
+}
+}
+} // facebook::memcache

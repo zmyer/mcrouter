@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -11,30 +11,29 @@
 
 #include <folly/Bits.h>
 #include <folly/GroupVarint.h>
-#include <folly/io/IOBuf.h>
 #include <folly/Varint.h>
+#include <folly/io/IOBuf.h>
 
 #include "mcrouter/lib/mc/umbrella.h"
-#include "mcrouter/lib/McReply.h"
-#include "mcrouter/lib/McRequest.h"
 
 #ifndef LIBMC_FBTRACE_DISABLE
 #include "mcrouter/lib/mc/mc_fbtrace_info.h"
 #endif
 
 static_assert(
-  mc_nops == 28,
-  "If you add a new mc_op, make sure to update lib/mc/umbrella_conv.h");
+    mc_nops == 28,
+    "If you add a new mc_op, make sure to update lib/mc/umbrella_conv.h");
 
 static_assert(
-  UM_NOPS == 29,
-  "If you add a new mc_op, make sure to update lib/mc/umbrella_conv.h");
+    UM_NOPS == 29,
+    "If you add a new mc_op, make sure to update lib/mc/umbrella_conv.h");
 
 static_assert(
-  mc_nres == 32,
-  "If you add a new mc_res, make sure to update lib/mc/umbrella_conv.h");
+    mc_nres == 32,
+    "If you add a new mc_res, make sure to update lib/mc/umbrella_conv.h");
 
-namespace facebook { namespace memcache {
+namespace facebook {
+namespace memcache {
 
 namespace {
 
@@ -46,15 +45,17 @@ namespace {
  * @param tag             Desired tag.
  * @param val             Output parameter containing the value of the tag.
  * @return                True if the tag was found. False otherwise.
- * @throw                 std::runtime_error on any parse error.
  */
-bool umbrellaGetTagValue(const uint8_t* header, size_t nheader,
-                         size_t tag, uint64_t& val) {
+bool umbrellaGetTagValue(
+    const uint8_t* header,
+    size_t nheader,
+    size_t tag,
+    uint64_t& val) {
   auto msg = reinterpret_cast<const entry_list_msg_t*>(header);
   size_t nentries = folly::Endian::big((uint16_t)msg->nentries);
-  if (reinterpret_cast<const uint8_t*>(&msg->entries[nentries])
-      != header + nheader) {
-    throw std::runtime_error("Invalid number of entries");
+  if (reinterpret_cast<const uint8_t*>(&msg->entries[nentries]) !=
+      header + nheader) {
+    return false;
   }
   for (size_t i = 0; i < nentries; ++i) {
     auto& entry = msg->entries[i];
@@ -73,6 +74,7 @@ void resetAdditionalFields(UmbrellaMessageInfo& info) {
   info.supportedCodecsSize = 0;
   info.usedCodecId = 0;
   info.uncompressedBodySize = 0;
+  info.dropProbability = 0;
 }
 
 size_t getNumAdditionalFields(const UmbrellaMessageInfo& info) {
@@ -90,6 +92,9 @@ size_t getNumAdditionalFields(const UmbrellaMessageInfo& info) {
     ++nAdditionalFields;
   }
   if (info.uncompressedBodySize != 0) {
+    ++nAdditionalFields;
+  }
+  if (info.dropProbability != 0) {
     ++nAdditionalFields;
   }
   return nAdditionalFields;
@@ -117,9 +122,7 @@ size_t serializeAdditionalFields(
   uint8_t* buf = destination;
 
   buf += serializeAdditionalFieldIfNonZero(
-      buf,
-      CaretAdditionalFieldType::TRACE_ID,
-      info.traceId);
+      buf, CaretAdditionalFieldType::TRACE_ID, info.traceId);
   buf += serializeAdditionalFieldIfNonZero(
       buf,
       CaretAdditionalFieldType::SUPPORTED_CODECS_FIRST_ID,
@@ -129,22 +132,23 @@ size_t serializeAdditionalFields(
       CaretAdditionalFieldType::SUPPORTED_CODECS_SIZE,
       info.supportedCodecsSize);
   buf += serializeAdditionalFieldIfNonZero(
-      buf,
-      CaretAdditionalFieldType::USED_CODEC_ID,
-      info.usedCodecId);
+      buf, CaretAdditionalFieldType::USED_CODEC_ID, info.usedCodecId);
   buf += serializeAdditionalFieldIfNonZero(
       buf,
       CaretAdditionalFieldType::UNCOMPRESSED_BODY_SIZE,
       info.uncompressedBodySize);
+  buf += serializeAdditionalFieldIfNonZero(
+      buf, CaretAdditionalFieldType::DROP_PROBABILITY, info.dropProbability);
 
   return buf - destination;
 }
 
 } // anonymous namespace
 
-UmbrellaParseStatus umbrellaParseHeader(const uint8_t* buf, size_t nbuf,
-                                        UmbrellaMessageInfo& infoOut) {
-
+UmbrellaParseStatus umbrellaParseHeader(
+    const uint8_t* buf,
+    size_t nbuf,
+    UmbrellaMessageInfo& infoOut) {
   if (nbuf == 0) {
     return UmbrellaParseStatus::NOT_ENOUGH_DATA;
   }
@@ -166,8 +170,8 @@ UmbrellaParseStatus umbrellaParseHeader(const uint8_t* buf, size_t nbuf,
     size_t messageSize = folly::Endian::big<uint32_t>(header->total_size);
     uint16_t nentries = folly::Endian::big<uint16_t>(header->nentries);
 
-    infoOut.headerSize = sizeof(entry_list_msg_t) +
-      sizeof(um_elist_entry_t) * nentries;
+    infoOut.headerSize =
+        sizeof(entry_list_msg_t) + sizeof(um_elist_entry_t) * nentries;
     if (infoOut.headerSize > messageSize) {
       return UmbrellaParseStatus::MESSAGE_PARSE_ERROR;
     }
@@ -179,10 +183,10 @@ UmbrellaParseStatus umbrellaParseHeader(const uint8_t* buf, size_t nbuf,
   return UmbrellaParseStatus::OK;
 }
 
-UmbrellaParseStatus caretParseHeader(const uint8_t* buff,
-                                     size_t nbuf,
-                                     UmbrellaMessageInfo& headerInfo) {
-
+UmbrellaParseStatus caretParseHeader(
+    const uint8_t* buff,
+    size_t nbuf,
+    UmbrellaMessageInfo& headerInfo) {
   /* we need the magic byte and the first byte of encoded header
      to determine if we have enough data in the buffer to get the
      entire header */
@@ -219,8 +223,8 @@ UmbrellaParseStatus caretParseHeader(const uint8_t* buff,
       uint64_t fieldType = folly::decodeVarint(range);
       uint64_t fieldValue = folly::decodeVarint(range);
 
-      if (fieldType > static_cast<uint64_t>(
-                          CaretAdditionalFieldType::UNCOMPRESSED_BODY_SIZE)) {
+      if (fieldType >
+          static_cast<uint64_t>(CaretAdditionalFieldType::DROP_PROBABILITY)) {
         // Additional Field Type not recognized, ignore.
         continue;
       }
@@ -240,6 +244,9 @@ UmbrellaParseStatus caretParseHeader(const uint8_t* buff,
           break;
         case CaretAdditionalFieldType::UNCOMPRESSED_BODY_SIZE:
           headerInfo.uncompressedBodySize = fieldValue;
+          break;
+        case CaretAdditionalFieldType::DROP_PROBABILITY:
+          headerInfo.dropProbability = fieldValue;
           break;
       }
     } catch (const std::invalid_argument& e) {
@@ -264,11 +271,7 @@ size_t caretPrepareHeader(const UmbrellaMessageInfo& info, char* headerBuf) {
 
   // Header
   char* additionalFields = folly::GroupVarint32::encode(
-      headerBuf + 1,
-      bodySize,
-      typeId,
-      reqId,
-      getNumAdditionalFields(info));
+      headerBuf + 1, bodySize, typeId, reqId, getNumAdditionalFields(info));
 
   // Additional fields
   additionalFields += serializeAdditionalFields(
@@ -288,13 +291,24 @@ uint64_t umbrellaDetermineReqId(const uint8_t* header, size_t nheader) {
   return id;
 }
 
-mc_op_t umbrellaDetermineOperation(const uint8_t* header, size_t nheader) {
+mc_op_t umbrellaDetermineOperation(
+    const uint8_t* header,
+    size_t nheader) noexcept {
   uint64_t op;
   if (!umbrellaGetTagValue(header, nheader, msg_op, op)) {
-    throw std::runtime_error("missing op");
+    LOG(ERROR) << "Operation is missing in umbrella header. "
+               << "Header size: " << nheader << ". Header: "
+               << folly::StringPiece(
+                      reinterpret_cast<const char*>(header), nheader);
+    return mc_op_unknown;
   }
+
   if (op >= UM_NOPS) {
-    throw std::runtime_error("invalid operation");
+    LOG(ERROR) << "Invalid operation read from umbrella header. "
+               << "Op: " << op << ". Header size: " << nheader << ". Header: "
+               << folly::StringPiece(
+                      reinterpret_cast<const char*>(header), nheader);
+    return mc_op_unknown;
   }
   return static_cast<mc_op_t>(detail::kUmbrellaOpToMc[op]);
 }
@@ -302,113 +316,6 @@ mc_op_t umbrellaDetermineOperation(const uint8_t* header, size_t nheader) {
 bool umbrellaIsReply(const uint8_t* header, size_t nheader) {
   uint64_t res;
   return umbrellaGetTagValue(header, nheader, msg_result, res);
-}
-
-McRequest umbrellaParseRequest(const folly::IOBuf& source,
-                               const uint8_t* header, size_t nheader,
-                               const uint8_t* body, size_t nbody,
-                               mc_op_t& opOut, uint64_t& reqidOut) {
-  McRequest req;
-  opOut = mc_op_unknown;
-  reqidOut = 0;
-
-  auto msg = reinterpret_cast<const entry_list_msg_t*>(header);
-  size_t nentries = folly::Endian::big((uint16_t)msg->nentries);
-  if (reinterpret_cast<const uint8_t*>(&msg->entries[nentries])
-      != header + nheader) {
-    throw std::runtime_error("Invalid number of entries");
-  }
-  for (size_t i = 0; i < nentries; ++i) {
-    auto& entry = msg->entries[i];
-    size_t tag = folly::Endian::big((uint16_t)entry.tag);
-    size_t val = folly::Endian::big((uint64_t)entry.data.val);
-    switch (tag) {
-      case msg_op:
-        if (val >= UM_NOPS) {
-          throw std::runtime_error("op out of range");
-        }
-        opOut = static_cast<mc_op_t>(umbrella_op_to_mc[val]);
-        break;
-
-      case msg_reqid:
-        if (val == 0) {
-          throw std::runtime_error("invalid reqid");
-        }
-        reqidOut = val;
-        break;
-
-      case msg_flags:
-        req.setFlags(val);
-        break;
-
-      case msg_exptime:
-        req.setExptime(val);
-        break;
-
-      case msg_delta:
-        req.setDelta(val);
-        break;
-
-      case msg_cas:
-        req.setCas(val);
-        break;
-
-      case msg_lease_id:
-        req.setLeaseToken(val);
-        break;
-
-      case msg_key:
-        if (!req.setKeyFrom(
-              source, body +
-              folly::Endian::big((uint32_t)entry.data.str.offset),
-              folly::Endian::big((uint32_t)entry.data.str.len) - 1)) {
-          throw std::runtime_error("Key: invalid offset/length");
-        }
-        break;
-
-      case msg_value:
-        if (!req.setValueFrom(
-              source, body +
-              folly::Endian::big((uint32_t)entry.data.str.offset),
-              folly::Endian::big((uint32_t)entry.data.str.len) - 1)) {
-          throw std::runtime_error("Value: invalid offset/length");
-        }
-        break;
-
-#ifndef LIBMC_FBTRACE_DISABLE
-      case msg_fbtrace:
-      {
-        auto off = folly::Endian::big((uint32_t)entry.data.str.offset);
-        auto len = folly::Endian::big((uint32_t)entry.data.str.len) - 1;
-
-        if (len > FBTRACE_METADATA_SZ) {
-          throw std::runtime_error("Fbtrace metadata too large");
-        }
-        if (off + len > nbody || off + len < off) {
-          throw std::runtime_error("Fbtrace metadata field invalid");
-        }
-        auto fbtraceInfo = new_mc_fbtrace_info(0);
-        memcpy(fbtraceInfo->metadata, body + off, len);
-        req.setFbtraceInfo(fbtraceInfo);
-        break;
-      }
-#endif
-
-      default:
-        /* Ignore unknown tags silently */
-        break;
-    }
-  }
-
-  if (opOut == mc_op_unknown) {
-    throw std::runtime_error("Request missing operation");
-  }
-
-  if (!reqidOut) {
-    throw std::runtime_error("Request missing reqid");
-  }
-
-  return req;
 }
 
 UmbrellaSerializedMessage::UmbrellaSerializedMessage() noexcept {
@@ -431,8 +338,9 @@ void UmbrellaSerializedMessage::clear() {
 }
 
 void UmbrellaSerializedMessage::appendInt(
-  entry_type_t type, int32_t tag, uint64_t val) {
-
+    entry_type_t type,
+    int32_t tag,
+    uint64_t val) {
   if (nEntries_ >= kInlineEntries) {
     error_ = true;
     return;
@@ -445,8 +353,10 @@ void UmbrellaSerializedMessage::appendInt(
 }
 
 void UmbrellaSerializedMessage::appendString(
-  int32_t tag, const uint8_t* data, size_t len, entry_type_t type) {
-
+    int32_t tag,
+    const uint8_t* data,
+    size_t len,
+    entry_type_t type) {
   if (nStrings_ >= kInlineStrings) {
     error_ = true;
     return;
@@ -465,9 +375,8 @@ void UmbrellaSerializedMessage::appendString(
 size_t UmbrellaSerializedMessage::finalizeMessage() {
   static char nul = '\0';
 
-  size_t size = sizeof(entry_list_msg_t) +
-    sizeof(um_elist_entry_t) * nEntries_ +
-    offset_;
+  size_t size =
+      sizeof(entry_list_msg_t) + sizeof(um_elist_entry_t) * nEntries_ + offset_;
 
   msg_.total_size = folly::Endian::big((uint32_t)size);
   msg_.nentries = folly::Endian::big((uint16_t)nEntries_);
@@ -476,7 +385,7 @@ size_t UmbrellaSerializedMessage::finalizeMessage() {
   size_t niovOut = 2;
 
   for (size_t i = 0; i < nStrings_; i++) {
-    iovs_[niovOut].iov_base = (char *)strings_[i].begin();
+    iovs_[niovOut].iov_base = (char*)strings_[i].begin();
     iovs_[niovOut].iov_len = strings_[i].size();
     niovOut++;
 
@@ -486,5 +395,5 @@ size_t UmbrellaSerializedMessage::finalizeMessage() {
   }
   return niovOut;
 }
-
-}} // facebook::memcache
+}
+} // facebook::memcache

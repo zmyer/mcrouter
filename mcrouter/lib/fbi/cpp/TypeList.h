@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -9,9 +9,13 @@
  */
 #pragma once
 
+#include <cstddef>
 #include <type_traits>
 
-namespace facebook { namespace memcache {
+#include "mcrouter/lib/carbon/TypeList.h"
+
+namespace facebook {
+namespace memcache {
 
 /**
  * Pair of arbitrary types.
@@ -30,14 +34,15 @@ struct Pair {
  * List holding arbitrary types
  */
 template <class... Xs>
-struct List {};
+using List = carbon::List<Xs...>;
 
 /**
  * Concatenates several lists into one.
  */
 namespace detail {
-template <class... Lists> struct ConcatenateListsImpl;
-}  // detail
+template <class... Lists>
+struct ConcatenateListsImpl;
+} // detail
 
 template <class... Lists>
 struct ConcatenateLists {
@@ -56,75 +61,44 @@ struct KV {
   using Value = T;
 };
 
-template <int Id, class KVList>
-struct HasKey;
-
-template <int Id>
-struct HasKey<Id, List<>> {
-  static constexpr bool value = false;
-};
-
-template <int Id, int K, class V, class... KVs>
-struct HasKey<Id, List<KV<K, V>, KVs...>> {
-  static constexpr bool value = (Id == K) || HasKey<Id, List<KVs...>>::value;
-};
-
 /**
  * (T, List<Ts...>) -> List<T, Ts...>
  */
-template <class T, class L> struct Prepend;
-template <class T, class L> using PrependT = typename Prepend<T, L>::type;
-
-template <class T, class... Ts>
-struct Prepend<T, List<Ts...>> {
-  using type = List<T, Ts...>;
-};
+template <class T, class L>
+using Prepend = typename carbon::Prepend<T, L>;
+template <class T, class L>
+using PrependT = typename Prepend<T, L>::type;
 
 /**
- * Values<List<KV<Id, T>...> -> List<T,...>
+ * Sorts a list of Carbon messages by typeId.
+ * List<T...> -> List<T...>
  */
 namespace detail {
-template <class KVList>
-struct ValuesImpl;
-
-template <>
-struct ValuesImpl<List<>> {
-  using type = List<>;
-};
-
-template <int Id, class T, class... KVs>
-struct ValuesImpl<List<KV<Id, T>, KVs...>> {
-  using type = PrependT<T, typename ValuesImpl<List<KVs...>>::type>;
-};
+template <class MessageList, size_t N, class Enable = void>
+struct SortImpl;
 } // detail
 
-template <class KVList>
-using Values = typename detail::ValuesImpl<KVList>::type;
+template <class MessageList>
+using Sort = detail::SortImpl<MessageList, 0>;
+template <class MessageList>
+using SortT = typename Sort<MessageList>::type;
 
 /**
- * Sorts a list of KVs by Id.
- * List<KV<Id, T>...> -> List<KV<Id, T>...>
- */
-namespace detail {
-template <class KVList, int N, class Enable = void> struct SortImpl;
-}  // detail
-
-template <class KVList> using Sort = detail::SortImpl<KVList, 0>;
-template <class KVList> using SortT = typename Sort<KVList>::type;
-
-/**
- * Given a sorted list of KVs (Ids >= 0), fills up holes in ID space
+ * Given a sorted list of Carbon messages (typeIds >= 0), fills up holes in ID
+ * space
  *
- * List<KV<2, T2>, KV<4, T4>> ->
- *   List<KV<0, void>, KV<1, void>, KV<2, T2>, KV<3, void>, KV<4, T4>>
+ * List<M2 (typeId=2), M4 (typeId=4)> ->
+ *   List<void, void, M2, void, M4>
  */
 namespace detail {
-template <int Start, class KVList, class Enable = void>
+template <int Start, class MessageList, class Enable = void>
 struct ExpandImpl;
-}  // detail
+} // detail
 
-template <class KVList> using Expand = detail::ExpandImpl<0, KVList>;
-template <class KVList> using ExpandT = typename Expand<KVList>::type;
+template <class MessageList>
+using Expand = detail::ExpandImpl<0, MessageList>;
+template <class MessageList>
+using ExpandT = typename Expand<MessageList>::type;
 
 /**
  * (F, Xs) -> F::op(X1, F::op(X2, ...))
@@ -144,7 +118,9 @@ struct Fold<F, X, Xs...> {
  * max(Xs...)
  */
 struct MaxOp {
-  static constexpr int op(int a, int b) { return a > b ? a : b; }
+  static constexpr int op(int a, int b) {
+    return a > b ? a : b;
+  }
 };
 template <int... Xs>
 using Max = Fold<MaxOp, Xs...>;
@@ -153,7 +129,9 @@ using Max = Fold<MaxOp, Xs...>;
  * min(Xs...)
  */
 struct MinOp {
-  static constexpr int op(int a, int b) { return a < b ? a : b; }
+  static constexpr int op(int a, int b) {
+    return a < b ? a : b;
+  }
 };
 template <int... Xs>
 using Min = Fold<MinOp, Xs...>;
@@ -164,7 +142,9 @@ using Min = Fold<MinOp, Xs...>;
 template <int Y, int... Xs>
 struct HasInt;
 template <int Y>
-struct HasInt<Y> { static constexpr bool value = false; };
+struct HasInt<Y> {
+  static constexpr bool value = false;
+};
 template <int Y, int X, int... Xs>
 struct HasInt<Y, X, Xs...> {
   static constexpr bool value = (Y == X ? true : HasInt<Y, Xs...>::value);
@@ -173,11 +153,27 @@ struct HasInt<Y, X, Xs...> {
 template <class Y, class... Xs>
 struct Has;
 template <class Y>
-struct Has<Y> { static constexpr bool value = false; };
+struct Has<Y> {
+  static constexpr bool value = false;
+};
 template <class Y, class X, class... Xs>
 struct Has<Y, X, Xs...> {
   static constexpr bool value =
-    (std::is_same<Y, X>::value ? true : Has<Y, Xs...>::value);
+      (std::is_same<Y, X>::value ? true : Has<Y, Xs...>::value);
+};
+
+/**
+ * Xs -> true iff all Xs are pairwise distinct types
+ */
+template <class... Xs>
+struct Distinct;
+template <>
+struct Distinct<> {
+  static constexpr bool value = true;
+};
+template <class X, class... Xs>
+struct Distinct<X, Xs...> {
+  static constexpr bool value = !Has<X, Xs...>::value && Distinct<Xs...>::value;
 };
 
 /**
@@ -186,21 +182,13 @@ struct Has<Y, X, Xs...> {
 template <int... Xs>
 struct DistinctInt;
 template <int X>
-struct DistinctInt<X> { static constexpr bool value = true; };
+struct DistinctInt<X> {
+  static constexpr bool value = true;
+};
 template <int X, int... Xs>
 struct DistinctInt<X, Xs...> {
   static constexpr bool value =
-    (HasInt<X, Xs...>::value ? false : DistinctInt<Xs...>::value);
-};
-
-template <class... Xs>
-struct Distinct;
-template <class X>
-struct Distinct<X> { static constexpr bool value = true; };
-template <class X, class... Xs>
-struct Distinct<X, Xs...> {
-  static constexpr bool value =
-    (Has<X, Xs...>::value ? false : Distinct<Xs...>::value);
+      (HasInt<X, Xs...>::value ? false : DistinctInt<Xs...>::value);
 };
 
 /**
@@ -238,51 +226,30 @@ using PairListSecondT = typename PairListSecond<List>::type;
 /**
  * ListContains<L, T>::value == true if and only if T appears in L
  */
-namespace detail {
-
-template <class List, class T>
-struct ListContainsImpl {
-  static constexpr bool value = false;
-};
-
-template <class T>
-struct ListContainsImpl<List<>, T> {
-  static constexpr bool value = false;
-};
-
-template <class T, class X, class... Xs>
-struct ListContainsImpl<List<X, Xs...>, T> {
-  static constexpr bool value =
-    std::is_same<T, X>::value ||
-    ListContainsImpl<List<Xs...>, T>::value;
-};
-
-} // detail
-
 template <class L, class T>
-using ListContains = typename detail::ListContainsImpl<L, T>;
+using ListContains = typename carbon::ListContains<L, T>;
 
 /**
  * Map a template template over a List of types.
  */
 namespace detail {
-template <template<typename> class F, class List>
+template <template <typename> class F, class List>
 struct MapTImpl;
 
-template <template<typename> class F>
+template <template <typename> class F>
 struct MapTImpl<F, List<>> {
   using type = List<>;
 };
 
-template <template<typename> class F, typename X, typename... Xs>
+template <template <typename> class F, typename X, typename... Xs>
 struct MapTImpl<F, List<X, Xs...>> {
   using type = PrependT<F<X>, typename MapTImpl<F, List<Xs...>>::type>;
 };
 } // detail
 
-template <template<typename> class F, typename List>
+template <template <typename> class F, typename List>
 using MapT = typename detail::MapTImpl<F, List>::type;
-
-}} // facebook::memcache
+}
+} // facebook::memcache
 
 #include "TypeList-inl.h"

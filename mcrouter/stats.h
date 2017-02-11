@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -14,23 +14,28 @@
 
 #include <folly/Range.h>
 
-#include "mcrouter/lib/network/gen-cpp2/mc_caret_protocol_types.h"
+#include "mcrouter/lib/network/gen/Memcache.h"
 
-namespace facebook { namespace memcache {
-
-template <class ThriftType>
-class TypedThriftReply;
-
+namespace facebook {
+namespace memcache {
 namespace mcrouter {
 
+// make sure MOVING_AVERAGE_WINDOW_SIZE_IN_SECOND can be exactly divided by
+// MOVING_AVERAGE_BIN_SIZE_IN_SECOND
+// the window size within which average stat rate is calculated
+#define MOVING_AVERAGE_WINDOW_SIZE_IN_SECOND (60 * 4)
+
+// the bin size for average stat rate
+#define MOVING_AVERAGE_BIN_SIZE_IN_SECOND (1)
+
 // define stat_name_t
-#define STAT(name,...) name##_stat,
+#define STAT(name, ...) name##_stat,
 #define STUI STAT
 #define STUIR STAT
 #define STSI STAT
 #define STSS STAT
 enum stat_name_t {
-  #include "stat_list.h"
+#include "stat_list.h"
   num_stats,
 };
 #undef STAT
@@ -40,40 +45,36 @@ enum stat_name_t {
 #undef STSS
 
 // Forward declarations
-class McrouterInstance;
-struct proxy_t;
+class CarbonRouterInstanceBase;
+class ProxyBase;
 
 /** statistics ftw */
 
 struct stat_s;
-typedef std::string(*string_fn_t)(void*);
+typedef std::string (*string_fn_t)(void*);
 
 enum stat_type_t {
   stat_string,
   stat_uint64,
   stat_int64,
   stat_double,
-//  stat_percentile, // TBD
+  //  stat_percentile, // TBD
   num_stat_types
 };
 
 enum stat_group_t {
-  mcproxy_stats        =        0x1,
-  detailed_stats       =        0x2,
-  cmd_all_stats        =        0x4,
-  cmd_in_stats         =        0x8,
-  cmd_out_stats        =       0x10,
-  cmd_error_stats      =       0x20,
-  ods_stats            =       0x40,
-  rate_stats           =      0x100,
-  count_stats          =      0x200,
-  outlier_stats        =      0x400,
-  max_stats            =      0x800,
-  all_stats            =     0xffff,
-  server_stats         =    0x10000,
-  memory_stats         =    0x20000,
-  suspect_server_stats =    0x40000,
-  unknown_stats        = 0x10000000,
+  mcproxy_stats = 0x1,
+  detailed_stats = 0x2,
+  cmd_error_stats = 0x20,
+  ods_stats = 0x40,
+  rate_stats = 0x100,
+  count_stats = 0x200,
+  max_stats = 0x800,
+  max_max_stats = 0x1000,
+  all_stats = 0xffff,
+  server_stats = 0x10000,
+  suspect_server_stats = 0x40000,
+  unknown_stats = 0x10000000,
 };
 
 /** defines a statistic: name, type, and data */
@@ -101,27 +102,40 @@ inline void stat_decr(stat_t* stats, stat_name_t stat_num, int64_t amount) {
   stat_incr(stats, stat_num, -amount);
 }
 
-void stat_incr_safe(stat_t*, stat_name_t);
+void stat_incr_safe(stat_t*, stat_name_t, int64_t amount = 1);
 void stat_decr_safe(stat_t*, stat_name_t);
 
 /**
  * Current aggregation of rate of stats[idx] (which must be an aggregated
  * rate stat), units will be per second.
  */
-double stats_aggregate_rate_value(const McrouterInstance& router, int idx);
+double stats_aggregate_rate_value(
+    const CarbonRouterInstanceBase& router,
+    int idx);
 
 /**
  * Current max between all buckets of stats[idx] (which must be an aggregated
  * max stat)
  */
-uint64_t stats_aggregate_max_value(const McrouterInstance& router, int idx);
+uint64_t stats_aggregate_max_value(
+    const CarbonRouterInstanceBase& router,
+    int idx);
+
+/**
+ * Current max between all proxies amongst all buckets of stats[idx]
+ */
+uint64_t stats_aggregate_max_max_value(
+    const CarbonRouterInstanceBase& router,
+    int idx);
 
 void stat_set_uint64(stat_t*, stat_name_t, uint64_t);
-uint64_t stat_get_uint64(stat_t*, stat_name_t);
+uint64_t stat_get_uint64(const stat_t*, stat_name_t);
 uint64_t stat_get_config_age(const stat_t* stats, uint64_t now);
-TypedThriftReply<cpp2::McStatsReply> stats_reply(proxy_t*, folly::StringPiece);
-void prepare_stats(McrouterInstance& router, stat_t* stats);
+McStatsReply stats_reply(ProxyBase*, folly::StringPiece);
+void prepare_stats(CarbonRouterInstanceBase& router, stat_t* stats);
 
 void set_standalone_args(folly::StringPiece args);
 
-}}} // facebook::memcache::mcrouter
+} // mcrouter
+} // memcache
+} // facebook

@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -13,18 +13,21 @@
 
 #include <folly/Format.h>
 
-#include "mcrouter/lib/McOperation.h"
-#include "mcrouter/lib/OperationTraits.h"
-#include "mcrouter/lib/RouteHandleTraverser.h"
 #include "mcrouter/ProxyRequestContext.h"
+#include "mcrouter/lib/McOperation.h"
+#include "mcrouter/lib/Operation.h"
+#include "mcrouter/lib/RouteHandleTraverser.h"
+#include "mcrouter/lib/carbon/RoutingGroups.h"
+#include "mcrouter/lib/network/gen/MemcacheRouteHandleIf.h"
 #include "mcrouter/routes/BigValueRouteIf.h"
-#include "mcrouter/routes/McrouterRouteHandle.h"
 
 namespace folly {
 class IOBuf;
 } // folly
 
-namespace facebook { namespace memcache { namespace mcrouter {
+namespace facebook {
+namespace memcache {
+namespace mcrouter {
 
 /**
  * For get-like request:
@@ -48,28 +51,35 @@ namespace facebook { namespace memcache { namespace mcrouter {
  */
 class BigValueRoute {
  public:
-  static std::string routeName() { return "big-value"; }
+  static std::string routeName() {
+    return "big-value";
+  }
 
   template <class Request>
-  void traverse(const Request& req,
-                const RouteHandleTraverser<McrouterRouteHandleIf>& t) const;
+  void traverse(
+      const Request& req,
+      const RouteHandleTraverser<MemcacheRouteHandleIf>& t) const;
 
-  BigValueRoute(McrouterRouteHandlePtr ch,
-                BigValueRouteOptions options);
+  BigValueRoute(
+      std::shared_ptr<MemcacheRouteHandleIf> ch,
+      BigValueRouteOptions options);
 
   template <class Request>
-  ReplyT<Request> route(const Request& req, GetLikeT<Request> = 0) const;
+  ReplyT<Request> route(const Request& req, carbon::GetLikeT<Request> = 0)
+      const;
 
   template <class Request>
-  ReplyT<Request> route(const Request& req, UpdateLikeT<Request> = 0) const;
+  ReplyT<Request> route(const Request& req, carbon::UpdateLikeT<Request> = 0)
+      const;
 
   template <class Request>
   ReplyT<Request> route(
-    const Request& req,
-    OtherThanT<Request, GetLike<>, UpdateLike<>> = 0) const;
+      const Request& req,
+      carbon::OtherThanT<Request, carbon::GetLike<>, carbon::UpdateLike<>> =
+          0) const;
 
  private:
-  const McrouterRouteHandlePtr ch_;
+  const std::shared_ptr<MemcacheRouteHandleIf> ch_;
   const BigValueRouteOptions options_;
 
   class ChunksInfo {
@@ -89,58 +99,30 @@ class BigValueRoute {
     bool valid_;
   };
 
-  /**
-   * Type of request to use when chunking get-like requests.
-   */
-  template <class Request>
-  struct ChunkGet;
-  template <class M>
-  struct ChunkGet<TypedThriftRequest<M>> {
-    using type = TypedThriftRequest<cpp2::McGetRequest>;
-  };
-  template <int op>
-  struct ChunkGet<McRequestWithMcOp<op>> {
-    using type = McRequestWithMcOp<mc_op_get>;
-  };
-  template <class Request>
-  using ChunkGetT = typename ChunkGet<Request>::type;
-
-  /**
-   * Type of request to use when chunking update-like requests.
-   */
-  template <class Request>
-  struct ChunkUpdate;
-  template <class M>
-  struct ChunkUpdate<TypedThriftRequest<M>> {
-    using type = TypedThriftRequest<cpp2::McSetRequest>;
-  };
-  template <int op>
-  struct ChunkUpdate<McRequestWithMcOp<op>> {
-    using type = McRequestWithMcOp<mc_op_set>;
-  };
-  template <class Request>
-  using ChunkUpdateT = typename ChunkUpdate<Request>::type;
-
   template <class Reply>
   std::vector<Reply> collectAllByBatches(
-    std::vector<std::function<Reply()>>& fs) const;
+      std::vector<std::function<Reply()>>& fs) const;
 
   template <class ToRequest, class FromRequest>
-  std::pair<std::vector<ToRequest>, ChunksInfo>
-  chunkUpdateRequests(const FromRequest& req) const;
+  std::pair<std::vector<ToRequest>, ChunksInfo> chunkUpdateRequests(
+      const FromRequest& req) const;
 
   template <class ToRequest, class FromRequest>
-  std::vector<ToRequest> chunkGetRequests(const FromRequest& req,
-                                          const ChunksInfo& info) const;
+  std::vector<ToRequest> chunkGetRequests(
+      const FromRequest& req,
+      const ChunksInfo& info) const;
 
   template <typename InputIterator, class Reply>
   Reply mergeChunkGetReplies(
-      InputIterator begin, InputIterator end, Reply&& init_reply) const;
+      InputIterator begin,
+      InputIterator end,
+      Reply&& init_reply) const;
 
-  folly::IOBuf createChunkKey(
-    folly::StringPiece key, uint32_t index, uint64_t suffix) const;
+  folly::IOBuf
+  createChunkKey(folly::StringPiece key, uint32_t index, uint64_t suffix) const;
 };
-
-}}} // facebook::memcache::mcrouter
+}
+}
+} // facebook::memcache::mcrouter
 
 #include "BigValueRoute-inl.h"

@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -10,23 +10,24 @@
 #include <folly/Memory.h>
 #include <folly/Range.h>
 
+#include "mcrouter/CarbonRouterInstanceBase.h"
+#include "mcrouter/McrouterLogger.h"
+#include "mcrouter/ProxyBase.h"
 #include "mcrouter/config.h"
 #include "mcrouter/flavor.h"
-#include "mcrouter/McrouterInstance.h"
-#include "mcrouter/McrouterLogger.h"
 #include "mcrouter/options.h"
-#include "mcrouter/proxy.h"
 #include "mcrouter/routes/McExtraRouteHandleProvider.h"
-#include "mcrouter/ShadowValidationData.h"
+#include "mcrouter/routes/McrouterRouteHandle.h"
 #include "mcrouter/standalone_options.h"
 
-namespace facebook { namespace memcache { namespace mcrouter {
+namespace facebook {
+namespace memcache {
+namespace mcrouter {
 
 bool read_standalone_flavor(
     const std::string& flavor,
     std::unordered_map<std::string, std::string>& option_dict,
     std::unordered_map<std::string, std::string>& st_option_dict) {
-
   if (!readFlavor(flavor, st_option_dict, option_dict)) {
     LOG(ERROR) << "CRITICAL: Couldn't initialize from standalone flavor file "
                << flavor;
@@ -43,11 +44,13 @@ std::string performOptionSubstitution(std::string str) {
   return str;
 }
 
-std::unique_ptr<ExtraRouteHandleProviderIf> createExtraRouteHandleProvider() {
-  return folly::make_unique<McExtraRouteHandleProvider>();
+std::unique_ptr<ExtraRouteHandleProviderIf<MemcacheRouterInfo>>
+createExtraRouteHandleProvider() {
+  return folly::make_unique<McExtraRouteHandleProvider<MemcacheRouterInfo>>();
 }
 
-std::unique_ptr<McrouterLogger> createMcrouterLogger(McrouterInstance& router) {
+std::unique_ptr<McrouterLogger> createMcrouterLogger(
+    CarbonRouterInstanceBase& router) {
   return folly::make_unique<McrouterLogger>(router);
 }
 
@@ -56,7 +59,7 @@ void extraValidateOptions(const McrouterOptions& opts) {
     // If config option is used, other options are superseded
     if (!opts.config_file.empty() || !opts.config_str.empty()) {
       VLOG(1) << "config option will supersede config-file"
-        " and config-str options";
+                 " and config-str options";
     }
     return;
   }
@@ -87,36 +90,26 @@ McrouterOptions defaultTestOptions() {
 }
 
 std::vector<std::string> defaultTestCommandLineArgs() {
-  return { "--disable-failure-logging", "--stats-logging-interval=0" };
+  return {"--disable-failure-logging", "--stats-logging-interval=0"};
 }
 
-void logTkoEvent(proxy_t& proxy, const TkoLog& tkoLog) { }
+void logTkoEvent(ProxyBase& proxy, const TkoLog& tkoLog) {}
 
-void logFailover(proxy_t& proxy, const FailoverContext& failoverContext) { }
+void logFailover(ProxyBase& proxy, const FailoverContext& failoverContext) {}
 
-void logShadowValidationError(proxy_t& proxy,
-                              const ShadowValidationData& valData) {
-  VLOG_EVERY_N(1,100)
-      << "Mismatch between shadow and normal reply" << std::endl
-      << "Key:" << valData.fullKey << std::endl
-      << "Expected Result:"
-      << mc_res_to_string(valData.normalResult) << std::endl
-      << "Shadow Result:"
-      << mc_res_to_string(valData.shadowResult) << std::endl;
+void initFailureLogger() {}
+
+bool initCompression(CarbonRouterInstanceBase&) {
+  return false;
 }
 
-void initFailureLogger() { }
-
-void initCompression(McrouterInstance&) { }
-
-void scheduleSingletonCleanup() { }
+void scheduleSingletonCleanup() {}
 
 std::unordered_map<std::string, folly::dynamic> additionalConfigParams() {
   return std::unordered_map<std::string, folly::dynamic>();
 }
 
-void insertCustomStartupOpts(folly::dynamic& options) {
-}
+void insertCustomStartupOpts(folly::dynamic& options) {}
 
 std::string getBinPath(folly::StringPiece name) {
   if (name == "mcrouter") {
@@ -126,5 +119,6 @@ std::string getBinPath(folly::StringPiece name) {
   }
   return "unknown";
 }
-
-}}}  // facebook::memcache::mcrouter
+}
+}
+} // facebook::memcache::mcrouter

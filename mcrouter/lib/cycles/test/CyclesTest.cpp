@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -11,9 +11,6 @@
 
 #include <gtest/gtest.h>
 
-#include <folly/Memory.h>
-
-#include "mcrouter/lib/cycles/Clocks.h"
 #include "mcrouter/lib/cycles/Cycles.h"
 
 using namespace facebook::memcache;
@@ -21,7 +18,7 @@ using namespace facebook::memcache;
 class CyclesTest : public ::testing::Test {
  protected:
   virtual void SetUp() {
-    cycles::startExtracting([](cycles::CycleStats){});
+    cycles::startExtracting([](cycles::CycleStats) {});
   }
 
   virtual void TearDown() {
@@ -36,9 +33,7 @@ TEST_F(CyclesTest, basic) {
 
 TEST_F(CyclesTest, inner_scope) {
   cycles::IntervalGuard ig;
-  {
-    EXPECT_TRUE(cycles::label(1, 2));
-  }
+  { EXPECT_TRUE(cycles::label(1, 2)); }
 }
 
 TEST_F(CyclesTest, no_interval) {
@@ -46,18 +41,14 @@ TEST_F(CyclesTest, no_interval) {
 }
 
 TEST_F(CyclesTest, interval_out_of_scope) {
-  {
-    cycles::IntervalGuard ig;
-  }
+  { cycles::IntervalGuard ig; }
   EXPECT_FALSE(cycles::label(1, 2));
 }
 
 TEST_F(CyclesTest, multi_threaded) {
   cycles::IntervalGuard ig;
 
-  std::thread t([]() {
-    EXPECT_FALSE(cycles::label(1, 2));
-  });
+  std::thread t([]() { EXPECT_FALSE(cycles::label(1, 2)); });
 
   t.join();
 }

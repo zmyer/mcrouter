@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -12,8 +12,8 @@
 
 #include <gtest/gtest.h>
 
-#include "mcrouter/lib/McReply.h"
-#include "mcrouter/lib/McRequest.h"
+#include "mcrouter/lib/McResUtil.h"
+#include "mcrouter/lib/network/gen/Memcache.h"
 #include "mcrouter/lib/routes/RandomRoute.h"
 #include "mcrouter/lib/test/RouteHandleTestUtil.h"
 #include "mcrouter/lib/test/TestRouteHandle.h"
@@ -27,33 +27,33 @@ using TestHandle = TestHandleImpl<TestRouteHandleIf>;
 
 TEST(randomRouteTest, success) {
   vector<std::shared_ptr<TestHandle>> test_handles{
-    make_shared<TestHandle>(GetRouteTestData(mc_res_found, "a")),
-    make_shared<TestHandle>(GetRouteTestData(mc_res_found, "b")),
-    make_shared<TestHandle>(GetRouteTestData(mc_res_found, "c")),
+      make_shared<TestHandle>(GetRouteTestData(mc_res_found, "a")),
+      make_shared<TestHandle>(GetRouteTestData(mc_res_found, "b")),
+      make_shared<TestHandle>(GetRouteTestData(mc_res_found, "c")),
   };
 
   TestRouteHandle<RandomRoute<TestRouteHandleIf>> rh(
-    get_route_handles(test_handles));
+      get_route_handles(test_handles));
 
-  auto reply = rh.route(McRequestWithMcOp<mc_op_get>("0"));
-  EXPECT_TRUE(reply.isHit());
+  auto reply = rh.route(McGetRequest("0"));
+  EXPECT_TRUE(isHitResult(reply.result()));
 }
 
 TEST(randomRouteTest, cover) {
   vector<std::shared_ptr<TestHandle>> test_handles{
-    make_shared<TestHandle>(GetRouteTestData(mc_res_found, "a")),
-    make_shared<TestHandle>(GetRouteTestData(mc_res_notfound, "b")),
+      make_shared<TestHandle>(GetRouteTestData(mc_res_found, "a")),
+      make_shared<TestHandle>(GetRouteTestData(mc_res_notfound, "b")),
   };
 
   TestRouteHandle<RandomRoute<TestRouteHandleIf>> rh(
-    get_route_handles(test_handles));
+      get_route_handles(test_handles));
 
   int hit = 0, miss = 0;
   const int rounds = 32;
   for (int i = 0; i < rounds; i++) {
-    auto reply = rh.route(McRequestWithMcOp<mc_op_get>("0"));
-    hit += reply.isHit();
-    miss += reply.isMiss();
+    auto reply = rh.route(McGetRequest("0"));
+    hit += isHitResult(reply.result());
+    miss += isMissResult(reply.result());
   }
 
   EXPECT_GT(hit, 0);
@@ -63,15 +63,15 @@ TEST(randomRouteTest, cover) {
 
 TEST(randomRouteTest, fail) {
   vector<std::shared_ptr<TestHandle>> test_handles{
-    make_shared<TestHandle>(GetRouteTestData(mc_res_timeout, "a")),
-    make_shared<TestHandle>(GetRouteTestData(mc_res_notfound, "b")),
-    make_shared<TestHandle>(GetRouteTestData(mc_res_remote_error, "c")),
+      make_shared<TestHandle>(GetRouteTestData(mc_res_timeout, "a")),
+      make_shared<TestHandle>(GetRouteTestData(mc_res_notfound, "b")),
+      make_shared<TestHandle>(GetRouteTestData(mc_res_remote_error, "c")),
   };
 
   TestRouteHandle<RandomRoute<TestRouteHandleIf>> rh(
-    get_route_handles(test_handles));
+      get_route_handles(test_handles));
 
-  auto reply = rh.route(McRequestWithMcOp<mc_op_get>("0"));
+  auto reply = rh.route(McGetRequest("0"));
 
-  EXPECT_TRUE(!reply.isHit());
+  EXPECT_TRUE(!isHitResult(reply.result()));
 }

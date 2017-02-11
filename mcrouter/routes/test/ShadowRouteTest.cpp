@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -15,8 +15,7 @@
 
 #include <folly/dynamic.h>
 
-#include "mcrouter/lib/network/TypedThriftMessage.h"
-#include "mcrouter/lib/network/gen-cpp2/mc_caret_protocol_types.h"
+#include "mcrouter/lib/network/gen/Memcache.h"
 #include "mcrouter/routes/DefaultShadowPolicy.h"
 #include "mcrouter/routes/ShadowRoute.h"
 #include "mcrouter/routes/ShadowRouteIf.h"
@@ -31,16 +30,16 @@ using std::vector;
 
 TEST(shadowRouteTest, defaultPolicy) {
   vector<std::shared_ptr<TestHandle>> normalHandle{
-    make_shared<TestHandle>(GetRouteTestData(mc_res_found, "a")),
+      make_shared<TestHandle>(GetRouteTestData(mc_res_found, "a")),
   };
   auto normalRh = get_route_handles(normalHandle)[0];
 
   vector<std::shared_ptr<TestHandle>> shadowHandles{
-    make_shared<TestHandle>(GetRouteTestData(mc_res_found, "b")),
-    make_shared<TestHandle>(GetRouteTestData(mc_res_found, "c")),
+      make_shared<TestHandle>(GetRouteTestData(mc_res_found, "b")),
+      make_shared<TestHandle>(GetRouteTestData(mc_res_found, "c")),
   };
 
-  TestFiberManager fm{fiber_local::ContextTypeTag()};
+  TestFiberManager fm{fiber_local<McrouterRouterInfo>::ContextTypeTag()};
 
   auto settings = ShadowSettings::create(
       folly::dynamic::object("index_range", folly::dynamic::array(0, 1)),
@@ -48,34 +47,30 @@ TEST(shadowRouteTest, defaultPolicy) {
 
   auto shadowRhs = get_route_handles(shadowHandles);
   McrouterShadowData shadowData{
-    {std::move(shadowRhs[0]), settings},
-    {std::move(shadowRhs[1]), settings},
+      {std::move(shadowRhs[0]), settings}, {std::move(shadowRhs[1]), settings},
   };
 
-  McrouterRouteHandle<ShadowRoute<DefaultShadowPolicy>> rh(
-    normalRh,
-    std::move(shadowData),
-    DefaultShadowPolicy());
+  McrouterRouteHandle<ShadowRoute<McrouterRouterInfo, DefaultShadowPolicy>> rh(
+      normalRh, std::move(shadowData), DefaultShadowPolicy());
 
-  fm.run([&] () {
+  fm.run([&]() {
     mockFiberContext();
-    auto reply = rh.route(TypedThriftRequest<cpp2::McGetRequest>("key"));
+    auto reply = rh.route(McGetRequest("key"));
 
     EXPECT_EQ(mc_res_found, reply.result());
-    EXPECT_EQ("a", reply.valueRangeSlow().str());
+    EXPECT_EQ("a", carbon::valueRangeSlow(reply).str());
   });
 
   EXPECT_TRUE(shadowHandles[0]->saw_keys.empty());
   EXPECT_TRUE(shadowHandles[1]->saw_keys.empty());
   settings->setKeyRange(0, 1);
-  settings->setValidateReplies(true);
 
-  fm.run([&] () {
+  fm.run([&]() {
     mockFiberContext();
-    auto reply = rh.route(TypedThriftRequest<cpp2::McGetRequest>("key"));
+    auto reply = rh.route(McGetRequest("key"));
 
     EXPECT_EQ(mc_res_found, reply.result());
-    EXPECT_EQ("a", reply.valueRangeSlow().str());
+    EXPECT_EQ("a", carbon::valueRangeSlow(reply).str());
   });
 
   EXPECT_EQ(shadowHandles[0]->saw_keys, vector<string>{"key"});

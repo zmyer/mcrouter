@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -11,7 +11,9 @@
 
 #include "mcrouter/lib/fbi/cpp/util.h"
 
-namespace facebook { namespace memcache { namespace detail {
+namespace facebook {
+namespace memcache {
+namespace detail {
 
 template <class Request>
 class CallbackBase<List<Request>> {
@@ -35,13 +37,15 @@ class CallbackWrapper;
 
 template <class Callback, class Request>
 class CallbackWrapper<Callback, List<Request>>
-    : public CallbackBase<ThriftRequestList> {
+    : public CallbackBase<McRequestList> {
  public:
   explicit CallbackWrapper(Callback& callback) : callback_(callback) {}
 
-  void multiOpEnd() noexcept override final { callback_.multiOpEnd(); }
+  void multiOpEnd() noexcept override final {
+    callback_.multiOpEnd();
+  }
 
-  using CallbackBase<ThriftRequestList>::onRequest;
+  using CallbackBase<McRequestList>::onRequest;
 
   void onRequest(Request&& req, bool noreply = false) noexcept override final {
     callback_.onRequest(std::move(req), noreply);
@@ -76,140 +80,55 @@ T McClientAsciiParser::getReply() {
 
 // Forward-declare initializers.
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_get>>();
+void McClientAsciiParser::initializeReplyParser<McGetRequest>();
 
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McGetRequest>>();
+void McClientAsciiParser::initializeReplyParser<McGetsRequest>();
 
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_gets>>();
+void McClientAsciiParser::initializeReplyParser<McLeaseGetRequest>();
 
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McGetsRequest>>();
+void McClientAsciiParser::initializeReplyParser<McSetRequest>();
 
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_lease_get>>();
+void McClientAsciiParser::initializeReplyParser<McAddRequest>();
 
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McLeaseGetRequest>>();
+void McClientAsciiParser::initializeReplyParser<McReplaceRequest>();
 
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_set>>();
+void McClientAsciiParser::initializeReplyParser<McLeaseSetRequest>();
 
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McSetRequest>>();
+void McClientAsciiParser::initializeReplyParser<McCasRequest>();
 
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_add>>();
+void McClientAsciiParser::initializeReplyParser<McIncrRequest>();
 
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McAddRequest>>();
+void McClientAsciiParser::initializeReplyParser<McDecrRequest>();
 
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_replace>>();
+void McClientAsciiParser::initializeReplyParser<McVersionRequest>();
 
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McReplaceRequest>>();
+void McClientAsciiParser::initializeReplyParser<McDeleteRequest>();
 
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_lease_set>>();
+void McClientAsciiParser::initializeReplyParser<McTouchRequest>();
 
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McLeaseSetRequest>>();
+void McClientAsciiParser::initializeReplyParser<McMetagetRequest>();
 
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_cas>>();
+void McClientAsciiParser::initializeReplyParser<McFlushAllRequest>();
 
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McCasRequest>>();
+void McClientAsciiParser::initializeReplyParser<McAppendRequest>();
 
 template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_incr>>();
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McIncrRequest>>();
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_decr>>();
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McDecrRequest>>();
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_version>>();
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McVersionRequest>>();
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_delete>>();
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McDeleteRequest>>();
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_touch>>();
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McTouchRequest>>();
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_metaget>>();
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McMetagetRequest>>();
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_flushall>>();
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McFlushAllRequest>>();
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_append>>();
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McAppendRequest>>();
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    McRequestWithMcOp<mc_op_prepend>>();
-
-template <>
-void McClientAsciiParser::initializeReplyParser<
-    TypedThriftRequest<cpp2::McPrependRequest>>();
+void McClientAsciiParser::initializeReplyParser<McPrependRequest>();
 
 template <class Request>
 void McClientAsciiParser::initializeReplyParser() {
@@ -222,10 +141,11 @@ void McClientAsciiParser::initializeReplyParser() {
 /**
  * Append piece of IOBuf in range [posStart, posEnd) to destination IOBuf.
  */
-inline void McAsciiParserBase::appendKeyPiece(const folly::IOBuf& from,
-                                              folly::IOBuf& to,
-                                              const char* posStart,
-                                              const char* posEnd) {
+inline void McAsciiParserBase::appendKeyPiece(
+    const folly::IOBuf& from,
+    folly::IOBuf& to,
+    const char* posStart,
+    const char* posEnd) {
   // No need to process empty piece.
   if (UNLIKELY(posEnd == posStart)) {
     return;
@@ -244,64 +164,32 @@ inline void McAsciiParserBase::appendKeyPiece(const folly::IOBuf& from,
 /**
  * Trim IOBuf to reference only data from range [posStart, posEnd).
  */
-inline void McAsciiParserBase::trimIOBufToRange(folly::IOBuf& buffer,
-                                                const char* posStart,
-                                                const char* posEnd) {
+inline void McAsciiParserBase::trimIOBufToRange(
+    folly::IOBuf& buffer,
+    const char* posStart,
+    const char* posEnd) {
   buffer.trimStart(posStart - reinterpret_cast<const char*>(buffer.data()));
   buffer.trimEnd(buffer.length() - (posEnd - posStart));
 }
 
 template <class Callback>
 McServerAsciiParser::McServerAsciiParser(Callback& callback)
-    : callback_(folly::make_unique<
-          detail::CallbackWrapper<Callback, ThriftRequestList>>(callback)) {
-}
-
-// Only used for McReply to fill in 'value' field for error messages or
-// IP addresses.
-// TypedThriftReply never uses 'value' field for such purposes.
-inline void McClientAsciiParser::stringValueHelper(const folly::IOBuf& buffer) {
-  McReply& message = currentMessage_.get<McReply>();
-
-  if (message.hasValue()) {
-    // Append to the last IOBuf in chain.
-    appendCurrentCharTo(buffer, *message.valueData_, p_);
-  } else {
-    // Emplace IOBuf.
-    // TODO: allocate IOBuf and clone it in one operation.
-    message.valueData_.emplace();
-    initFirstCharIOBuf(buffer, message.valueData_.value(), p_);
-  }
-}
+    : callback_(
+          folly::make_unique<detail::CallbackWrapper<Callback, McRequestList>>(
+              callback)) {}
 
 template <class Reply>
 void McClientAsciiParser::consumeErrorMessage(const folly::IOBuf&) {
   auto& message = currentMessage_.get<Reply>();
 
-  message->message.push_back(*p_);
-  message->__isset.message = true;
-}
-
-template <>
-inline void McClientAsciiParser::consumeErrorMessage<McReply>(
-    const folly::IOBuf& buffer) {
-
-  stringValueHelper(buffer);
+  message.message().push_back(*p_);
 }
 
 template <class Reply>
 void McClientAsciiParser::consumeVersion(const folly::IOBuf& buffer) {
   auto& message = currentMessage_.get<Reply>();
 
-  appendCurrentCharTo(buffer, message->value, p_);
-  message->__isset.value = true;
-}
-
-template <>
-inline void McClientAsciiParser::consumeVersion<McReply>(
-    const folly::IOBuf& buffer) {
-
-  stringValueHelper(buffer);
+  appendCurrentCharTo(buffer, message.value(), p_);
 }
 
 template <class Reply>
@@ -309,41 +197,16 @@ void McClientAsciiParser::consumeIpAddr(const folly::IOBuf& buffer) {
   auto& message = currentMessage_.get<Reply>();
   char inAddrBuf[sizeof(struct in6_addr)];
   // Max ip address length is INET6_ADDRSTRLEN - 1 chars.
-  if (message->ipAddress.size() < INET6_ADDRSTRLEN) {
+  if (message.ipAddress().size() < INET6_ADDRSTRLEN) {
     char addr[INET6_ADDRSTRLEN] = {0};
-    memcpy(addr, message->ipAddress.data(), message->ipAddress.size());
+    memcpy(addr, message.ipAddress().data(), message.ipAddress().size());
     if (strchr(addr, ':') == nullptr) {
       if (inet_pton(AF_INET, addr, inAddrBuf) > 0) {
-        message->set_ipv(4);
+        message.ipv() = 4;
       }
     } else {
       if (inet_pton(AF_INET6, addr, inAddrBuf) > 0) {
-        message->set_ipv(6);
-      }
-    }
-  }
-}
-
-template <>
-inline void McClientAsciiParser::consumeIpAddr<McReply>(
-    const folly::IOBuf& buffer) {
-
-  auto& message = currentMessage_.get<McReply>();
-  mc_msg_t* mcMsgT = const_cast<mc_msg_t*>(message.msg_.get());
-
-  // Max ip address length is INET6_ADDRSTRLEN - 1 chars.
-  if (message.valueData_->computeChainDataLength() < INET6_ADDRSTRLEN) {
-    char addr[INET6_ADDRSTRLEN] = {0};
-    message.valueData_->coalesce();
-    memcpy(addr, message.valueData_->data(), message.valueData_->length());
-    mcMsgT->ipv = 0;
-    if (strchr(addr, ':') == nullptr) {
-      if (inet_pton(AF_INET, addr, &mcMsgT->ip_addr) > 0) {
-        mcMsgT->ipv = 4;
-      }
-    } else {
-      if (inet_pton(AF_INET6, addr, &mcMsgT->ip_addr) > 0) {
-        mcMsgT->ipv = 6;
+        message.ipv() = 6;
       }
     }
   }
@@ -353,32 +216,27 @@ template <class Reply>
 void McClientAsciiParser::consumeIpAddrHelper(const folly::IOBuf&) {
   auto& message = currentMessage_.get<Reply>();
 
-  message->ipAddress.push_back(*p_);
-  message->__isset.ipAddress = true;
-}
-
-template <>
-inline void McClientAsciiParser::consumeIpAddrHelper<McReply>(
-    const folly::IOBuf& buffer) {
-
-  stringValueHelper(buffer);
+  message.ipAddress().push_back(*p_);
 }
 
 inline void McClientAsciiParser::initFirstCharIOBuf(
-    const folly::IOBuf& from, folly::IOBuf& to, const char* pos) {
-
+    const folly::IOBuf& from,
+    folly::IOBuf& to,
+    const char* pos) {
   // Copy current IOBuf.
   from.cloneOneInto(to);
   trimIOBufToRange(to, pos, pos + 1);
 }
 
 inline void McClientAsciiParser::appendCurrentCharTo(
-    const folly::IOBuf& from, folly::IOBuf& to, const char* pos) {
-
+    const folly::IOBuf& from,
+    folly::IOBuf& to,
+    const char* pos) {
   // If it is just a next char in the same memory chunk, just append it.
   // Otherwise we need to append new IOBuf.
   if (to.prev()->data() + to.prev()->length() ==
-        reinterpret_cast<const void*>(pos) && to.prev()->tailroom() > 0) {
+          reinterpret_cast<const void*>(pos) &&
+      to.prev()->tailroom() > 0) {
     to.prev()->append(1);
   } else {
     auto nextPiece = from.cloneOne();
@@ -387,20 +245,9 @@ inline void McClientAsciiParser::appendCurrentCharTo(
   }
 }
 
-/**
- * McReply needs to clear its existing value before reusing the value field
- * for an error message. This is not needed for TypedThriftReply since
- * we use a different field ('message') for error messages.
- */
 template <class Reply>
 void McClientAsciiParser::resetErrorMessage(Reply& message) {
-  message->__isset.message = false;
-  message->message.clear();
+  message.message().clear();
 }
-
-template <>
-inline void McClientAsciiParser::resetErrorMessage<McReply>(McReply& message) {
-  message.valueData_.clear();
 }
-
-}} // facebook::memcache
+} // facebook::memcache

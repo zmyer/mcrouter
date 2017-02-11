@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -15,13 +15,14 @@
 #include <unordered_map>
 
 #include <boost/filesystem.hpp>
+#include <boost/thread/shared_mutex.hpp>
 
-#include <folly/SharedMutex.h>
 #include <folly/Singleton.h>
 
 #include "mcrouter/lib/debug/Fifo.h"
 
-namespace facebook { namespace memcache {
+namespace facebook {
+namespace memcache {
 
 /**
  * Manager of fifos.
@@ -38,7 +39,8 @@ class FifoManager {
    * basePath/threadId pair.
    *
    * @param fifoBasePath  Base path of the fifo.
-   * @return              The "thread_local" fifo.
+   * @return              The "thread_local" fifo, or nullptr if fifoBasePath
+   *                      is empty.
    */
   std::shared_ptr<Fifo> fetchThreadLocal(const std::string& fifoBasePath);
 
@@ -57,7 +59,9 @@ class FifoManager {
   FifoManager();
 
   std::unordered_map<std::string, std::shared_ptr<Fifo>> fifos_;
-  folly::SharedMutex fifosMutex_;
+  // Note: folly::SharedMutex has caused build issues on Ubuntu 14.04 due to a
+  // gcc-4.8 bug. Here, boost::shared_mutex is an appropriate workaround.
+  boost::shared_mutex fifosMutex_;
 
   // Thread that connects to fifos
   std::thread thread_;
@@ -92,5 +96,5 @@ class FifoManager {
 
   friend class folly::Singleton<FifoManager>;
 };
-
-}} // facebook::memcache
+}
+} // facebook::memcache

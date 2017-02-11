@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -13,67 +13,58 @@
 #include <string>
 #include <vector>
 
-#include "mcrouter/lib/McRequest.h"
-#include "mcrouter/lib/network/ThriftMessageList.h"
-#include "mcrouter/lib/network/TypedThriftMessage.h"
+#include "mcrouter/lib/Operation.h"
 #include "mcrouter/lib/RouteHandleTraverser.h"
-#include "mcrouter/routes/McrouterRouteHandle.h"
+#include "mcrouter/lib/carbon/RequestReplyUtil.h"
 
-namespace facebook { namespace memcache { namespace mcrouter {
+namespace folly {
+struct dynamic;
+}
+
+namespace facebook {
+namespace memcache {
+
+template <class RouteHandleIf>
+class RouteHandleFactory;
+
+namespace mcrouter {
 
 /* RouteHandle that can send to a different target based on McOperation id */
+template <class RouterInfo>
 class OperationSelectorRoute {
+ private:
+  using RouteHandleIf = typename RouterInfo::RouteHandleIf;
+  using RouteHandlePtr = typename RouterInfo::RouteHandlePtr;
+  using RoutableRequests = typename RouterInfo::RoutableRequests;
+
  public:
-  static std::string routeName() { return "operation-selector"; }
+  static std::string routeName() {
+    return "operation-selector";
+  }
 
   OperationSelectorRoute(
-    std::vector<McrouterRouteHandlePtr> operationPolicies,
-    McrouterRouteHandlePtr&& defaultPolicy)
+      carbon::RequestIdMap<RoutableRequests, RouteHandlePtr> operationPolicies,
+      RouteHandlePtr&& defaultPolicy)
       : operationPolicies_(std::move(operationPolicies)),
-        defaultPolicy_(std::move(defaultPolicy)) {
-  }
-
-  template <int M>
-  void traverse(const McRequestWithMcOp<M>& req,
-                const RouteHandleTraverser<McrouterRouteHandleIf>& t) const {
-    if (operationPolicies_[M]) {
-      t(*operationPolicies_[M], req);
-    } else if (defaultPolicy_) {
-      t(*defaultPolicy_, req);
-    }
-  }
+        defaultPolicy_(std::move(defaultPolicy)) {}
 
   template <class Request>
-  void traverse(const Request& req,
-                const RouteHandleTraverser<McrouterRouteHandleIf>& t) const {
-    static constexpr int op =
-      OpFromType<typename Request::rawType, RequestOpMapping>::value;
-
-    if (operationPolicies_[op]) {
-      t(*operationPolicies_[op], req);
+  void traverse(
+      const Request& req,
+      const RouteHandleTraverser<RouteHandleIf>& t) const {
+    if (const auto& rh =
+            operationPolicies_.template getByRequestType<Request>()) {
+      t(*rh, req);
     } else if (defaultPolicy_) {
       t(*defaultPolicy_, req);
     }
-  }
-
-  template <int M>
-  McReply route(const McRequestWithMcOp<M>& req) const {
-    if (operationPolicies_[M]) {
-      return operationPolicies_[M]->route(req);
-    } else if (defaultPolicy_) {
-      return defaultPolicy_->route(req);
-    }
-
-    return McReply(DefaultReply, req);
   }
 
   template <class Request>
   ReplyT<Request> route(const Request& req) const {
-    static constexpr int op =
-      OpFromType<typename Request::rawType, RequestOpMapping>::value;
-
-    if (operationPolicies_[op]) {
-      return operationPolicies_[op]->route(req);
+    if (const auto& rh =
+            operationPolicies_.template getByRequestType<Request>()) {
+      return rh->route(req);
     } else if (defaultPolicy_) {
       return defaultPolicy_->route(req);
     }
@@ -81,9 +72,19 @@ class OperationSelectorRoute {
     return ReplyT<Request>();
   }
 
-private:
-  const std::vector<McrouterRouteHandlePtr> operationPolicies_;
-  const McrouterRouteHandlePtr defaultPolicy_;
+ private:
+  const carbon::RequestIdMap<RoutableRequests, RouteHandlePtr>
+      operationPolicies_;
+  const RouteHandlePtr defaultPolicy_;
 };
 
-}}}  // facebook::memcache::mcrouter
+template <class RouterInfo>
+typename RouterInfo::RouteHandlePtr makeOperationSelectorRoute(
+    RouteHandleFactory<typename RouterInfo::RouteHandleIf>& factory,
+    const folly::dynamic& json);
+
+} // mcrouter
+} // memcache
+} // facebook
+
+#include "OperationSelectorRoute-inl.h"

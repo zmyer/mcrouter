@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -16,8 +16,17 @@
 #include "mcrouter/lib/Operation.h"
 #include "mcrouter/lib/Reply.h"
 #include "mcrouter/lib/RouteHandleTraverser.h"
+#include "mcrouter/lib/config/RouteHandleBuilder.h"
 
-namespace facebook { namespace memcache {
+namespace folly {
+struct dynamic;
+}
+
+namespace facebook {
+namespace memcache {
+
+template <class RouteHandleIf>
+class RouteHandleFactory;
 
 /**
  * Returns the default reply for each request right away
@@ -29,13 +38,40 @@ struct NullRoute {
   }
 
   template <class Request>
-  void traverse(const Request& req,
-                const RouteHandleTraverser<RouteHandleIf>& t) const { }
+  void traverse(
+      const Request& req,
+      const RouteHandleTraverser<RouteHandleIf>& t) const {}
 
   template <class Request>
   static ReplyT<Request> route(const Request& req) {
-    return ReplyT<Request>(DefaultReply, req);
+    return createReply(DefaultReply, req);
   }
 };
 
-}} // facebook::memcache
+namespace mcrouter {
+
+template <class RouteHandleIf>
+std::shared_ptr<RouteHandleIf> createNullRoute() {
+  return makeRouteHandle<RouteHandleIf, NullRoute>();
+}
+
+template <class RouteHandleIf>
+std::shared_ptr<RouteHandleIf> makeNullRoute(
+    RouteHandleFactory<RouteHandleIf>&,
+    const folly::dynamic&) {
+  return createNullRoute<RouteHandleIf>();
+}
+
+template <class RouteHandleIf>
+std::shared_ptr<RouteHandleIf> makeNullOrSingletonRoute(
+    std::vector<std::shared_ptr<RouteHandleIf>> rh) {
+  assert(rh.size() <= 1);
+  if (rh.empty()) {
+    return createNullRoute<RouteHandleIf>();
+  }
+  return std::move(rh[0]);
+}
+
+} // mcrouter
+}
+} // facebook::memcache

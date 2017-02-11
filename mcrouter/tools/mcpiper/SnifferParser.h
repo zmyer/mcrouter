@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -18,15 +18,16 @@
 #include "mcrouter/lib/Operation.h"
 #include "mcrouter/tools/mcpiper/ClientServerMcParser.h"
 
-namespace facebook { namespace memcache {
+namespace facebook {
+namespace memcache {
 
 /**
  * Wrapper around ClientServerMcParser that also tracks of information
  * useful for sniffer (e.g. socket addresses, keys for replies).
  *
  * @param Callback  Callback containing two functions:
- *                  void requestReady(msgId, request, fromAddress, toAddress);
- *                  void replyReady(msgId, reply, key, fromAddress, toAddress);
+ *                  void requestReady(msgId, request, from, to, protocol);
+ *                  void replyReady(msgId, reply, key, from, to, protocol);
  */
 template <class Callback>
 class SnifferParser {
@@ -37,10 +38,17 @@ class SnifferParser {
     return parser_;
   }
 
-  void setAddresses(folly::SocketAddress fromAddress,
-                    folly::SocketAddress toAddress) {
+  void setAddresses(
+      folly::SocketAddress fromAddress,
+      folly::SocketAddress toAddress) {
     fromAddress_ = std::move(fromAddress);
     toAddress_ = std::move(toAddress);
+  }
+
+  // See the comments on currentMsgStartTimeUs_ for information about when
+  // this gets set.
+  void setCurrentMsgStartTime(uint64_t msgStartTimeUs) {
+    currentMsgStartTimeUs_ = msgStartTimeUs;
   }
 
  private:
@@ -49,13 +57,17 @@ class SnifferParser {
 
   // Holds the id of the request and the key of the matching message.
   struct Item {
-    Item(uint64_t id, std::string k, TimePoint now)
+    Item(uint64_t id, std::string k, uint64_t msgStartTimeUs, TimePoint now)
         : reqId(id),
           key(std::move(k)),
-          created(now) { }
+          msgStartTimeUs(msgStartTimeUs),
+          created(now) {}
 
     uint64_t reqId;
     std::string key;
+    // time when the item was sent through mcrouter
+    uint64_t msgStartTimeUs;
+    // time when the item was created in mcpiper
     TimePoint created;
 
     folly::IntrusiveListHook listHook;
@@ -72,18 +84,27 @@ class SnifferParser {
   std::unordered_map<uint64_t, Item> msgs_;
   // Keeps an in-order list of what should be invalidated.
   folly::IntrusiveList<Item, &Item::listHook> evictionQueue_;
+  // Start time of the currently parsed message.
+  // Between parsing the header and the message body, it temporarily holds the
+  // sender-side start time of the message that we deserialized from the header.
+  // It is necessary to store here because we want to save it with the item,
+  // despite the Item being parsed separately from the header.
+  uint64_t currentMsgStartTimeUs_;
 
   void evictOldItems(TimePoint now);
 
   // ClientServerMcParser callbacks
   template <class Request>
-  void requestReady(uint64_t msgId, Request request);
-  template <class Request>
-  void replyReady(uint64_t msgId, ReplyT<Request> reply);
+  void requestReady(uint64_t msgId, Request&& request);
+  template <class Reply>
+  void replyReady(
+      uint64_t msgId,
+      Reply&& reply,
+      ReplyStatsContext replyStatsContext);
 
   friend class ClientServerMcParser<SnifferParser>;
 };
-
-}} // facebook::memcache
+}
+} // facebook::memcache
 
 #include "SnifferParser-inl.h"

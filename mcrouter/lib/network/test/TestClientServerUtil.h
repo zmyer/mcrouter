@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -13,47 +13,34 @@
 #include <functional>
 #include <string>
 
-#include <folly/experimental/fibers/FiberManager.h>
 #include <folly/Function.h>
+#include <folly/fibers/FiberManager.h>
 #include <folly/io/async/EventBase.h>
 
 #include "mcrouter/lib/mc/msg.h"
 #include "mcrouter/lib/network/AsyncMcClient.h"
 #include "mcrouter/lib/network/AsyncMcServer.h"
 #include "mcrouter/lib/network/AsyncMcServerWorker.h"
-#include "mcrouter/lib/network/gen-cpp2/mc_caret_protocol_types.h"
+#include "mcrouter/lib/network/CarbonMessageDispatcher.h"
+#include "mcrouter/lib/network/CarbonMessageList.h"
+#include "mcrouter/lib/network/gen/Memcache.h"
 #include "mcrouter/lib/network/test/ListenSocket.h"
-#include "mcrouter/lib/network/ThriftMessageList.h"
-#include "mcrouter/lib/network/ThriftMsgDispatcher.h"
-#include "mcrouter/lib/network/TypedThriftMessage.h"
 
-namespace facebook { namespace memcache { namespace test {
+namespace facebook {
+namespace memcache {
+namespace test {
 
-class TestServerOnRequest
-    : public ThriftMsgDispatcher<TRequestList,
-                                 TestServerOnRequest,
-                                 McServerRequestContext&&> {
+class TestServerOnRequest {
  public:
   TestServerOnRequest(std::atomic<bool>& shutdown, bool outOfOrder);
 
-  void onRequest(McServerRequestContext&& ctx,
-                 McRequestWithMcOp<mc_op_get>&& req);
-
-  void onRequest(McServerRequestContext&& ctx,
-                 TypedThriftRequest<cpp2::McGetRequest>&& req);
-
-  void onRequest(McServerRequestContext&& ctx,
-                 McRequestWithMcOp<mc_op_set>&& req);
-
-  void onRequest(McServerRequestContext&& ctx,
-                 TypedThriftRequest<cpp2::McSetRequest>&& req);
-
-  void onRequest(McServerRequestContext&& ctx,
-                 TypedThriftRequest<cpp2::McVersionRequest>&& req);
+  void onRequest(McServerRequestContext&& ctx, McGetRequest&& req);
+  void onRequest(McServerRequestContext&& ctx, McSetRequest&& req);
+  void onRequest(McServerRequestContext&& ctx, McVersionRequest&& req);
 
   template <class Request>
   void onRequest(McServerRequestContext&&, Request&&) {
-    LOG(ERROR) << "Unhandled operation " << typeid(Request).name();
+    LOG(ERROR) << "Unhandled operation: " << Request::name;
   }
 
  protected:
@@ -63,9 +50,9 @@ class TestServerOnRequest
       McServerRequestContext::reply(std::move(context), std::move(reply));
     } else {
       waitingReplies_.push_back(
-        [ctx = std::move(context), reply = std::move(reply)]() mutable {
-          McServerRequestContext::reply(std::move(ctx), std::move(reply));
-        });
+          [ ctx = std::move(context), reply = std::move(reply) ]() mutable {
+            McServerRequestContext::reply(std::move(ctx), std::move(reply));
+          });
       if (waitingReplies_.size() == 1) {
         flushQueue();
       }
@@ -83,13 +70,14 @@ class TestServerOnRequest
 class TestServer {
  public:
   template <class OnRequest = TestServerOnRequest>
-  static std::unique_ptr<TestServer> create(bool outOfOrder,
-                                            bool useSsl,
-                                            int maxInflight = 10,
-                                            int timeoutMs = 250,
-                                            size_t maxConns = 100,
-                                            bool useDefaultVersion = false,
-                                            size_t numThreads = 1) {
+  static std::unique_ptr<TestServer> create(
+      bool outOfOrder,
+      bool useSsl,
+      int maxInflight = 10,
+      int timeoutMs = 250,
+      size_t maxConns = 100,
+      bool useDefaultVersion = false,
+      size_t numThreads = 1) {
     std::unique_ptr<TestServer> server(new TestServer(
         outOfOrder,
         useSsl,
@@ -98,8 +86,9 @@ class TestServer {
         maxConns,
         useDefaultVersion,
         numThreads));
-    server->run([&s = *server](AsyncMcServerWorker& worker) {
-      worker.setOnRequest(OnRequest(s.shutdown_, s.outOfOrder_));
+    server->run([& s = *server](AsyncMcServerWorker & worker) {
+      worker.setOnRequest(
+          MemcacheRequestHandler<OnRequest>(s.shutdown_, s.outOfOrder_));
     });
     return server;
   }
@@ -130,8 +119,14 @@ class TestServer {
   std::atomic<bool> shutdown_{false};
   std::atomic<size_t> acceptedConns_{0};
 
-  TestServer(bool outOfOrder, bool useSsl, int maxInflight, int timeoutMs,
-             size_t maxConns, bool useDefaultVersion, size_t numThreads);
+  TestServer(
+      bool outOfOrder,
+      bool useSsl,
+      int maxInflight,
+      int timeoutMs,
+      size_t maxConns,
+      bool useDefaultVersion,
+      size_t numThreads);
 
   void run(std::function<void(AsyncMcServerWorker&)> init);
 };
@@ -139,7 +134,9 @@ class TestServer {
 using SSLContextProvider = std::function<std::shared_ptr<folly::SSLContext>()>;
 
 // do not use SSL encryption at all
-constexpr std::nullptr_t noSsl() { return nullptr; }
+constexpr std::nullptr_t noSsl() {
+  return nullptr;
+}
 // valid client SSL certs
 SSLContextProvider validSsl();
 // non-existent client SSL certs
@@ -149,23 +146,25 @@ SSLContextProvider brokenSsl();
 
 class TestClient {
  public:
-  TestClient(std::string host,
-             uint16_t port,
-             int timeoutMs,
-             mc_protocol_t protocol = mc_ascii_protocol,
-             SSLContextProvider ssl = noSsl(),
-             uint64_t qosClass = 0,
-             uint64_t qosPath = 0);
+  TestClient(
+      std::string host,
+      uint16_t port,
+      int timeoutMs,
+      mc_protocol_t protocol = mc_ascii_protocol,
+      SSLContextProvider ssl = noSsl(),
+      uint64_t qosClass = 0,
+      uint64_t qosPath = 0);
 
   void setThrottle(size_t maxInflight, size_t maxOutstanding) {
     client_->setThrottle(maxInflight, maxOutstanding);
   }
 
-  void setStatusCallbacks(std::function<void()> onUp,
-                          std::function<void(bool aborting)> onDown);
+  void setStatusCallbacks(
+      std::function<void()> onUp,
+      std::function<void(bool aborting)> onDown);
 
-  void sendGet(std::string key, mc_res_t expectedResult,
-               uint32_t timeoutMs = 200);
+  void
+  sendGet(std::string key, mc_res_t expectedResult, uint32_t timeoutMs = 200);
 
   void sendSet(std::string key, std::string value, mc_res_t expectedResult);
 
@@ -215,5 +214,6 @@ class TestClient {
 };
 
 std::string genBigValue();
-
-}}} // facebook::memcache::test
+}
+}
+} // facebook::memcache::test

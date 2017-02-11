@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -12,43 +12,27 @@
 #include <memory>
 #include <string>
 
+#include <folly/Optional.h>
 #include <folly/io/IOBuf.h>
-
-#include "mcrouter/lib/McMsgRef.h"
 
 namespace folly {
 class IOBuf;
-template <class T> class Range;
+template <class T>
+class Range;
 using StringPiece = Range<const char*>;
 } // folly
 
-namespace facebook { namespace memcache {
+namespace facebook {
+namespace memcache {
 
 folly::StringPiece getRange(const std::unique_ptr<folly::IOBuf>& buf);
 folly::StringPiece getRange(const folly::IOBuf& buf);
 
 folly::StringPiece coalesceAndGetRange(std::unique_ptr<folly::IOBuf>& buf);
 folly::StringPiece coalesceAndGetRange(folly::IOBuf& buf);
+folly::StringPiece coalesceAndGetRange(folly::Optional<folly::IOBuf>& buf);
 
-/**
- * Create an IOBuf that will incref the msg, wrap the key/value of the msg
- * and decref the msg on destruction.
- *
- * @param returnEmpty  If true, will return an empty IOBuf object if
- *                     the key/value is missing or zero length.
- *                     Otherwise would return nullptr in that case.
- */
-std::unique_ptr<folly::IOBuf> makeMsgKeyIOBuf(const McMsgRef& msg,
-                                              bool returnEmpty = false);
-
-std::unique_ptr<folly::IOBuf> makeMsgValueIOBuf(const McMsgRef& msg,
-                                                bool returnEmpty = false);
-
-folly::IOBuf makeMsgKeyIOBufStack(const McMsgRef& msg);
-folly::IOBuf makeMsgValueIOBufStack(const McMsgRef& msg);
-
-bool hasSameMemoryRegion(const folly::IOBuf& buf,
-                         folly::StringPiece range);
+bool hasSameMemoryRegion(const folly::IOBuf& buf, folly::StringPiece range);
 
 bool hasSameMemoryRegion(const folly::IOBuf& a, const folly::IOBuf& b);
 
@@ -77,8 +61,11 @@ folly::IOBuf concatAll(InputIterator begin, InputIterator end) {
  * cloned.length() == size.
  * @return false If the range is invalid.
  */
-inline bool cloneInto(folly::IOBuf& out, const folly::IOBuf& source,
-                      const uint8_t* begin, size_t size) {
+inline bool cloneInto(
+    folly::IOBuf& out,
+    const folly::IOBuf& source,
+    const uint8_t* begin,
+    size_t size) {
   if (!(begin >= source.data() &&
         begin + size <= source.data() + source.length())) {
     return false;
@@ -99,9 +86,8 @@ inline bool cloneInto(folly::IOBuf& out, const folly::IOBuf& source,
  * @return  On success, a string copy of input byte range.
  *          On failure, empty string.
  */
-inline std::string copyAsString(const folly::IOBuf& source,
-                                const uint8_t* begin,
-                                size_t size) {
+inline std::string
+copyAsString(const folly::IOBuf& source, const uint8_t* begin, size_t size) {
   assert(size > 0);
 
   std::string ret;
@@ -118,4 +104,11 @@ inline std::string copyAsString(const folly::IOBuf& source,
   return ret;
 }
 
-}} // facebook::memcache
+/**
+ * If there is only one iovec then just creating it using IOBuf constructor.
+ * Otherwise using coalesceSlow.
+ */
+folly::IOBuf
+coalesceIovecs(const struct iovec* iov, size_t iovcnt, size_t destCapacity);
+}
+} // facebook::memcache

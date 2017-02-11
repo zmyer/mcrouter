@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -11,12 +11,13 @@
 
 #include "mcrouter/lib/network/AsyncMcClientImpl.h"
 
-namespace facebook { namespace memcache {
+namespace facebook {
+namespace memcache {
 
-inline AsyncMcClient::AsyncMcClient(folly::EventBase& eventBase,
-                                    ConnectionOptions options) :
-    base_(AsyncMcClientImpl::create(eventBase, std::move(options))) {
-}
+inline AsyncMcClient::AsyncMcClient(
+    folly::EventBase& eventBase,
+    ConnectionOptions options)
+    : base_(AsyncMcClientImpl::create(eventBase, std::move(options))) {}
 
 inline void AsyncMcClient::closeNow() {
   base_->closeNow();
@@ -31,14 +32,16 @@ inline void AsyncMcClient::setStatusCallbacks(
 inline void AsyncMcClient::setRequestStatusCallbacks(
     std::function<void(int pendingDiff, int inflightDiff)> onStateChange,
     std::function<void(int numToSend)> onWrite) {
-  base_->setRequestStatusCallbacks(std::move(onStateChange),
-                                   std::move(onWrite));
+  base_->setRequestStatusCallbacks(
+      std::move(onStateChange), std::move(onWrite));
 }
 
 template <class Request>
-ReplyT<Request> AsyncMcClient::sendSync(const Request& request,
-                                        std::chrono::milliseconds timeout) {
-  return base_->sendSync(request, timeout);
+ReplyT<Request> AsyncMcClient::sendSync(
+    const Request& request,
+    std::chrono::milliseconds timeout,
+    ReplyStatsContext* replyContext) {
+  return base_->sendSync(request, timeout, replyContext);
 }
 
 inline void AsyncMcClient::setThrottle(size_t maxInflight, size_t maxPending) {
@@ -61,4 +64,14 @@ inline void AsyncMcClient::updateWriteTimeout(
 inline const folly::AsyncTransportWrapper* AsyncMcClient::getTransport() {
   return base_->getTransport();
 }
-}} // facebook::memcache
+
+inline double AsyncMcClient::getRetransmissionInfo() {
+  return base_->getRetransmissionInfo();
+}
+
+template <class Request>
+double AsyncMcClient::getDropProbability() const {
+  return base_->getDropProbability<Request>();
+}
+}
+} // facebook::memcache

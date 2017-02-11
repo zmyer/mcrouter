@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -9,32 +9,62 @@
  */
 #pragma once
 
-#include "mcrouter/lib/Operation.h"
-#include "mcrouter/lib/RouteHandleTraverser.h"
 #include "mcrouter/McrouterFiberContext.h"
-#include "mcrouter/proxy.h"
-#include "mcrouter/ProxyRequestContext.h"
+#include "mcrouter/ProxyBase.h"
+#include "mcrouter/ProxyRequestContextTyped.h"
+#include "mcrouter/lib/Operation.h"
+#include "mcrouter/lib/Reply.h"
+#include "mcrouter/lib/RouteHandleTraverser.h"
+#include "mcrouter/lib/config/RouteHandleBuilder.h"
+#include "mcrouter/lib/config/RouteHandleFactory.h"
+#include "mcrouter/routes/DevNullRoute.h"
 #include "mcrouter/routes/McrouterRouteHandle.h"
 
-namespace facebook { namespace memcache { namespace mcrouter {
+namespace facebook {
+namespace memcache {
+namespace mcrouter {
 
 /**
  * Same as NullRoute, but with Mcrouter stats reporting.
  */
+template <class RouterInfo>
 class DevNullRoute {
+ private:
+  using RouteHandleIf = typename RouterInfo::RouteHandleIf;
+
  public:
-  static std::string routeName() { return "devnull"; }
+  static std::string routeName() {
+    return "devnull";
+  }
 
   template <class Request>
-  void traverse(const Request& req,
-                const RouteHandleTraverser<McrouterRouteHandleIf>& t) const { }
+  void traverse(
+      const Request& req,
+      const RouteHandleTraverser<RouteHandleIf>& t) const {}
 
   template <class Request>
   static ReplyT<Request> route(const Request& req) {
-    auto& ctx = fiber_local::getSharedCtx();
-    stat_incr(ctx->proxy().stats, dev_null_requests_stat, 1);
-    return ReplyT<Request>(DefaultReply, req);
+    auto& ctx = fiber_local<RouterInfo>::getSharedCtx();
+    ctx->proxy().stats().increment(dev_null_requests_stat);
+    return createReply(DefaultReply, req);
   }
 };
 
-}}}  // facebook::memcache::mcrouter
+namespace detail {
+
+template <class RouterInfo>
+typename RouterInfo::RouteHandlePtr makeDevNullRoute() {
+  return makeRouteHandleWithInfo<RouterInfo, DevNullRoute>();
+}
+
+} // detail
+
+template <class RouterInfo>
+typename RouterInfo::RouteHandlePtr makeDevNullRoute(
+    RouteHandleFactory<typename RouterInfo::RouteHandleIf>&,
+    const folly::dynamic&) {
+  return detail::makeDevNullRoute<RouterInfo>();
+}
+} // mcrouter
+} // memcache
+} // facebook

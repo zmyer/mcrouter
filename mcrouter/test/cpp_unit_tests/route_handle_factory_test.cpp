@@ -10,12 +10,12 @@
 #include <glog/logging.h>
 #include <gtest/gtest.h>
 
-#include "mcrouter/lib/config/RouteHandleFactory.h"
-#include "mcrouter/lib/network/gen-cpp2/mc_caret_protocol_types.h"
-#include "mcrouter/lib/network/TypedThriftMessage.h"
-#include "mcrouter/options.h"
 #include "mcrouter/PoolFactory.h"
-#include "mcrouter/proxy.h"
+#include "mcrouter/Proxy.h"
+#include "mcrouter/lib/config/RouteHandleFactory.h"
+#include "mcrouter/lib/network/gen/Memcache.h"
+#include "mcrouter/lib/network/gen/MemcacheRouterInfo.h"
+#include "mcrouter/options.h"
 #include "mcrouter/routes/McRouteHandleProvider.h"
 #include "mcrouter/routes/test/RouteHandleTestUtil.h"
 
@@ -28,69 +28,69 @@ TEST(RouteHandleFactoryTest, sanity) {
   auto router = getTestRouter();
   auto proxy = router->getProxy(0);
   PoolFactory pf(folly::dynamic::object(), router->configApi());
-  McRouteHandleProvider provider(*proxy, pf);
-  RouteHandleFactory<McrouterRouteHandleIf> factory(provider, proxy->getId());
+  McRouteHandleProvider<MemcacheRouterInfo> provider(*proxy, pf);
+  RouteHandleFactory<MemcacheRouteHandleIf> factory(provider, proxy->getId());
 
   auto rh = factory.create("AllAsyncRoute|ErrorRoute");
   EXPECT_TRUE(rh != nullptr);
   fm.run([&rh]() {
-    auto reply = rh->route(TypedThriftRequest<cpp2::McGetRequest>("a"));
+    auto reply = rh->route(McGetRequest("a"));
     EXPECT_EQ(mc_res_notfound, reply.result());
   });
 
   rh = factory.create("AllFastestRoute|ErrorRoute");
   EXPECT_TRUE(rh != nullptr);
   fm.run([&rh]() {
-    auto reply = rh->route(TypedThriftRequest<cpp2::McGetRequest>("a"));
-    EXPECT_TRUE(reply.isError());
+    auto reply = rh->route(McGetRequest("a"));
+    EXPECT_TRUE(isErrorResult(reply.result()));
   });
 
   rh = factory.create("AllInitialRoute|ErrorRoute");
   EXPECT_TRUE(rh != nullptr);
   fm.run([&rh]() {
-    auto reply = rh->route(TypedThriftRequest<cpp2::McGetRequest>("a"));
-    EXPECT_TRUE(reply.isError());
+    auto reply = rh->route(McGetRequest("a"));
+    EXPECT_TRUE(isErrorResult(reply.result()));
   });
 
   rh = factory.create("AllMajorityRoute|ErrorRoute");
   EXPECT_TRUE(rh != nullptr);
   fm.run([&rh]() {
-    auto reply = rh->route(TypedThriftRequest<cpp2::McGetRequest>("a"));
-    EXPECT_TRUE(reply.isError());
+    auto reply = rh->route(McGetRequest("a"));
+    EXPECT_TRUE(isErrorResult(reply.result()));
   });
 
   rh = factory.create("AllSyncRoute|ErrorRoute");
   EXPECT_TRUE(rh != nullptr);
   fm.run([&rh]() {
-    auto reply = rh->route(TypedThriftRequest<cpp2::McGetRequest>("a"));
-    EXPECT_TRUE(reply.isError());
+    auto reply = rh->route(McGetRequest("a"));
+    EXPECT_TRUE(isErrorResult(reply.result()));
   });
 
   rh = factory.create("FailoverRoute|NullRoute");
   EXPECT_TRUE(rh != nullptr);
   fm.run([&rh]() {
-    auto reply = rh->route(TypedThriftRequest<cpp2::McGetRequest>("a"));
+    auto reply = rh->route(McGetRequest("a"));
     EXPECT_EQ(mc_res_notfound, reply.result());
   });
 
   rh = factory.create("HashRoute|ErrorRoute");
   EXPECT_TRUE(rh != nullptr);
   fm.run([&rh]() {
-    auto reply = rh->route(TypedThriftRequest<cpp2::McGetRequest>("a"));
-    EXPECT_TRUE(reply.isError());
+    auto reply = rh->route(McGetRequest("a"));
+    EXPECT_TRUE(isErrorResult(reply.result()));
   });
 
   rh = factory.create("HostIdRoute|ErrorRoute");
   EXPECT_TRUE(rh != nullptr);
   fm.run([&rh]() {
-    auto reply = rh->route(TypedThriftRequest<cpp2::McGetRequest>("a"));
-    EXPECT_TRUE(reply.isError());
+    auto reply = rh->route(McGetRequest("a"));
+    EXPECT_TRUE(isErrorResult(reply.result()));
   });
 
   rh = factory.create("LatestRoute|NullRoute");
   EXPECT_TRUE(rh != nullptr);
   fm.run([&rh]() {
-    auto reply = rh->route(TypedThriftRequest<cpp2::McGetRequest>("a"));
+    auto reply = rh->route(McGetRequest("a"));
     EXPECT_EQ(mc_res_notfound, reply.result());
   });
 
@@ -98,21 +98,21 @@ TEST(RouteHandleFactoryTest, sanity) {
   EXPECT_TRUE(rh != nullptr);
   fm.run([&rh]() {
     mockFiberContext();
-    auto reply = rh->route(TypedThriftRequest<cpp2::McGetRequest>("a"));
+    auto reply = rh->route(McGetRequest("a"));
     EXPECT_EQ(mc_res_notfound, reply.result());
   });
 
   rh = factory.create("MissFailoverRoute|NullRoute");
   EXPECT_TRUE(rh != nullptr);
   fm.run([&rh]() {
-    auto reply = rh->route(TypedThriftRequest<cpp2::McGetRequest>("a"));
+    auto reply = rh->route(McGetRequest("a"));
     EXPECT_EQ(mc_res_notfound, reply.result());
   });
 
   rh = factory.create("RandomRoute|ErrorRoute");
   EXPECT_TRUE(rh != nullptr);
   fm.run([&rh]() {
-    auto reply = rh->route(TypedThriftRequest<cpp2::McGetRequest>("a"));
-    EXPECT_TRUE(reply.isError());
+    auto reply = rh->route(McGetRequest("a"));
+    EXPECT_TRUE(isErrorResult(reply.result()));
   });
 }

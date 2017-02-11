@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -14,101 +14,57 @@
 
 #include "mcrouter/lib/fbi/cpp/TypeList.h"
 
-namespace facebook { namespace memcache {
-
-/**
- * @param Id  non-negative message type ID
- * @param M   arbitrary type representing the message
- */
-template <int Id, class M>
-using TypedMsg = KV<Id, M>;
+namespace facebook {
+namespace memcache {
 
 namespace detail {
-template <class TMList, class Proc, class... Args>
+template <class MessageList, class Proc, class... Args>
 struct CallDispatcherImpl;
 
-template <class T, class TMList>
-struct IdFromTypeImpl;
-
 template <class T, class PairList>
-struct ReplyFromRequestTypeImpl;
+struct RequestFromReplyTypeImpl;
+} // detail
 
-}  // detail
-
-template <class TMList>
+template <class MessageList>
 struct StaticChecker;
 
-template <int... Ids, class... Ms>
-struct StaticChecker<List<TypedMsg<Ids, Ms>...>> {
-  static_assert(Min<Ids...>::value >= 0, "Ids must be >= 0");
-  static_assert(DistinctInt<Ids...>::value, "Ids must be distinct");
-  static_assert(Distinct<Ms...>::value, "Types must be distinct");
+template <class... Ms>
+struct StaticChecker<List<Ms...>> {
+  static_assert(DistinctInt<Ms::typeId...>::value, "Type IDs must be distinct");
+  static_assert(Min<Ms::typeId...>::value >= 0, "Type IDs must be nonnegative");
 };
 
 /**
- * Given a T and a List of TypedMsg<Id, Type>...
- * Gets the Id for which T = Type
- * If the type is not in the list, gives -1 as Id
- */
-template <class T, class TMList>
-struct IdFromType;
-
-template <class T, class TM, class... TMs>
-struct IdFromType<T, List<TM, TMs...>> {
-  static constexpr int value =
-      detail::IdFromTypeImpl<T, List<TM, TMs...>>::value;
-  static_assert(value != -1, "Supplied list doesn't contain given type id");
-};
-
-/**
- * Given a Request Type T and a List of Request Reply Pairs,
- * Gets the Reply type for the Request Type T.
- * If the type is not in the list, gives void as the type
+ * Given a reply type T and a list of request-reply pairs, gets the request
+ * type paired with T.
  */
 template <class T, class PairList>
-using ReplyFromRequestType =
-    typename detail::ReplyFromRequestTypeImpl<T, PairList>::type;
-
-/**
- * Traits to enable/disable methods based on,
- * whether the convertToTyped() methods for the corresponding
- * operations are present or not
- */
-template <class Request, class Supported = void>
-struct ConvertToTypedIfSupported {
-  static constexpr std::false_type value{};
-};
-
-template <class Request>
-struct ConvertToTypedIfSupported<
-    Request,
-    typename std::enable_if<!std::is_same<
-        decltype(convertToTyped(std::declval<Request>())),
-        void>::value>::type> {
-  static constexpr std::true_type value{};
-};
+using RequestFromReplyType =
+    typename detail::RequestFromReplyTypeImpl<T, PairList>::type;
 
 /**
  * Call dispatcher transforms calls in the form
  *   dispatch(Id, args...)
  * to
  *   proc.processMsg<M>(args...),
- * where TypedMsg<Id, M> is an element of the specified list.
+ * where M is an element of MessageList.
  *
  * Dispatch is done in constant time.
  *
- * @param TMList  List of supported typed messages: List<TypedMsg<Id, M>, ...>
- * @param Proc    Processor class, must provide
- *                template <class M> void processMsg()
- * @param Args    Exact argument types of processMsg() above.
+ * @param MessageList  List of supported typed messages: List<M ...>. Each M
+ *                     should have a nested static member `typeId` of type
+ *                     size_t.
+ * @param Proc         Processor class, must provide
+ *                     template <class M> void processMsg()
+ * @param Args         Exact argument types of processMsg() above.
  */
-template <class TMList, class Proc, class... Args>
+template <class MessageList, class Proc, class... Args>
 class CallDispatcher {
-  StaticChecker<TMList> checker_;
+  StaticChecker<MessageList> checker_;
 
  public:
   /**
-   * @return true iff id is present in TMList
+   * @return true iff id is the typeId of a message in MessageList
    */
   bool dispatch(size_t id, Proc& proc, Args... args) {
     auto& f = impl_.array_[id];
@@ -120,9 +76,9 @@ class CallDispatcher {
   }
 
  private:
-  detail::CallDispatcherImpl<TMList, Proc, Args...> impl_;
+  detail::CallDispatcherImpl<MessageList, Proc, Args...> impl_;
 };
-
-}}  // facebook::memcache
+}
+} // facebook::memcache
 
 #include "TypedMsg-inl.h"

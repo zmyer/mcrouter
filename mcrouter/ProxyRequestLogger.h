@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -9,30 +9,32 @@
  */
 #pragma once
 
+#include "mcrouter/McrouterFiberContext.h"
 #include "mcrouter/lib/mc/msg.h"
 
 namespace facebook {
 namespace memcache {
 namespace mcrouter {
 
-struct proxy_t;
+template <class RouterInfo>
+class Proxy;
 struct RequestLoggerContext;
 
+template <class RouterInfo>
 class ProxyRequestLogger {
  public:
-  explicit ProxyRequestLogger(proxy_t* proxy)
-    : proxy_(proxy) {
-  }
+  explicit ProxyRequestLogger(Proxy<RouterInfo>& proxy) : proxy_(proxy) {}
 
   template <class Request>
   void log(const RequestLoggerContext& loggerContext);
 
  protected:
-  proxy_t* proxy_;
+  Proxy<RouterInfo>& proxy_;
 
-  void logError(const mc_res_t result);
+  void logError(mc_res_t result, RequestClass reqClass);
 };
-
-}}}  // facebook::memcache::mcrouter
+}
+}
+} // facebook::memcache::mcrouter
 
 #include "ProxyRequestLogger-inl.h"

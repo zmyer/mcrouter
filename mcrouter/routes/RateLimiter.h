@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
+ *  Copyright (c) 2017, Facebook, Inc.
  *  All rights reserved.
  *
  *  This source code is licensed under the BSD-style license found in the
@@ -10,16 +10,17 @@
 #pragma once
 
 #include <folly/Optional.h>
+#include <folly/TokenBucket.h>
 
-#include "mcrouter/lib/McOperationTraits.h"
-#include "mcrouter/lib/network/ThriftMessageTraits.h"
-#include "mcrouter/TokenBucket.h"
+#include "mcrouter/lib/carbon/RoutingGroups.h"
 
 namespace folly {
 struct dynamic;
 } // folly
 
-namespace facebook { namespace memcache { namespace mcrouter {
+namespace facebook {
+namespace memcache {
+namespace mcrouter {
 
 /**
  * This is a container for TokenBucket rate limiters for different
@@ -44,28 +45,33 @@ class RateLimiter {
   explicit RateLimiter(const folly::dynamic& json);
 
   template <class Request>
-  bool canPassThrough(GetLikeT<Request> = 0) {
+  bool canPassThrough(carbon::GetLikeT<Request> = 0) {
     return LIKELY(
-      !getsTb_ || getsTb_->consume(1.0, TokenBucket::defaultClockNow()));
+        !getsTb_ ||
+        getsTb_->consume(1.0, folly::TokenBucket::defaultClockNow()));
   }
 
   template <class Request>
-  bool canPassThrough(UpdateLikeT<Request> = 0) {
+  bool canPassThrough(carbon::UpdateLikeT<Request> = 0) {
     return LIKELY(
-      !setsTb_ || setsTb_->consume(1.0, TokenBucket::defaultClockNow()));
+        !setsTb_ ||
+        setsTb_->consume(1.0, folly::TokenBucket::defaultClockNow()));
   }
 
   template <class Request>
-  bool canPassThrough(DeleteLikeT<Request> = 0) {
+  bool canPassThrough(carbon::DeleteLikeT<Request> = 0) {
     return LIKELY(
-      !deletesTb_ || deletesTb_->consume(1.0, TokenBucket::defaultClockNow()));
+        !deletesTb_ ||
+        deletesTb_->consume(1.0, folly::TokenBucket::defaultClockNow()));
   }
 
   template <class Request>
-  bool canPassThrough(OtherThanT<Request,
-                                 GetLike<>,
-                                 UpdateLike<>,
-                                 DeleteLike<>> = 0) {
+  bool canPassThrough(
+      carbon::OtherThanT<
+          Request,
+          carbon::GetLike<>,
+          carbon::UpdateLike<>,
+          carbon::DeleteLike<>> = 0) {
     return true;
   }
 
@@ -75,9 +81,10 @@ class RateLimiter {
   std::string toDebugStr() const;
 
  private:
-  folly::Optional<TokenBucket> getsTb_;
-  folly::Optional<TokenBucket> setsTb_;
-  folly::Optional<TokenBucket> deletesTb_;
+  folly::Optional<folly::TokenBucket> getsTb_;
+  folly::Optional<folly::TokenBucket> setsTb_;
+  folly::Optional<folly::TokenBucket> deletesTb_;
 };
-
-}}}  // facebook::memcache::mcrouter
+}
+}
+} // facebook::memcache::mcrouter
