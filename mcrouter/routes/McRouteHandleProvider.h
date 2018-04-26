@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -54,7 +52,9 @@ class McRouteHandleProvider
   std::vector<RouteHandlePtr> create(
       RouteHandleFactory<RouteHandleIf>& factory,
       folly::StringPiece type,
-      const folly::dynamic& json) override final;
+      const folly::dynamic& json) final;
+
+  const folly::dynamic& parsePool(const folly::dynamic& json) final;
 
   folly::StringKeyedUnorderedMap<RouteHandlePtr> releaseAsyncLogRoutes() {
     return std::move(asyncLogRoutes_);
@@ -70,7 +70,7 @@ class McRouteHandleProvider
     return std::move(accessPoints_);
   }
 
-  ~McRouteHandleProvider();
+  ~McRouteHandleProvider() override;
 
  private:
   ProxyBase& proxy_;
@@ -104,10 +104,15 @@ class McRouteHandleProvider
 
   RouteHandleFactoryMap buildRouteMap();
 
+  // This can be removed when the buildRouteMap specialization for
+  // MemcacheRouterInfo is removed.
+  RouteHandleFactoryMap buildCheckedRouteMap();
+
   std::unique_ptr<ExtraRouteHandleProviderIf<RouterInfo>> buildExtraProvider();
 };
-}
-}
-} // facebook::memcache::mcrouter
+
+} // mcrouter
+} // memcache
+} // facebook
 
 #include "McRouteHandleProvider-inl.h"

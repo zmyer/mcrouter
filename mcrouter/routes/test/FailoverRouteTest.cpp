@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include <memory>
@@ -50,6 +48,21 @@ McrouterRouteHandlePtr makeFailoverRouteInOrder(
 }
 }
 } // facebook::memcache::mcrouter
+
+TEST(failoverRouteTest, nofailover) {
+  std::vector<std::shared_ptr<TestHandle>> test_handles{
+      make_shared<TestHandle>(GetRouteTestData(mc_res_found, "a"))};
+
+  mockFiberContext();
+  auto rh = makeFailoverRouteInOrder(
+      get_route_handles(test_handles),
+      FailoverErrorsSettings(),
+      nullptr,
+      /* failoverTagging */ false);
+
+  auto reply = rh->route(McGetRequest("0"));
+  EXPECT_EQ("a", carbon::valueRangeSlow(reply).str());
+}
 
 TEST(failoverRouteTest, success) {
   std::vector<std::shared_ptr<TestHandle>> test_handles{
@@ -260,7 +273,7 @@ TEST(failoverRouteTest, rateLimit) {
   auto rh = makeFailoverRouteInOrder(
       get_route_handles(test_handles),
       FailoverErrorsSettings(),
-      folly::make_unique<FailoverRateLimiter>(0.5, 1),
+      std::make_unique<FailoverRateLimiter>(0.5, 1),
       /* failoverTagging */ false);
 
   // tokens: 1

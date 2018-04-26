@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "McrouterLogger.h"
@@ -19,9 +17,9 @@
 #include <boost/filesystem/path.hpp>
 
 #include <folly/DynamicConverter.h>
-#include <folly/ThreadName.h>
 #include <folly/dynamic.h>
 #include <folly/json.h>
+#include <folly/system/ThreadName.h>
 
 #include "mcrouter/CarbonRouterInstanceBase.h"
 #include "mcrouter/McrouterLogFailure.h"
@@ -136,6 +134,12 @@ void write_config_sources_info_to_disk(CarbonRouterInstanceBase& router) {
   }
 }
 
+std::string statsUpdateFunctionName(folly::StringPiece routerName) {
+  static std::atomic<uint64_t> uniqueId(0);
+  return folly::to<std::string>(
+      "carbon-logger-fn-", routerName, "-", uniqueId.fetch_add(1));
+}
+
 } // anonymous namespace
 
 McrouterLogger::McrouterLogger(
@@ -143,14 +147,14 @@ McrouterLogger::McrouterLogger(
     std::unique_ptr<AdditionalLoggerIf> additionalLogger)
     : router_(router),
       additionalLogger_(std::move(additionalLogger)),
-      pid_(getpid()) {}
+      functionHandle_(statsUpdateFunctionName(router_.opts().router_name)) {}
 
 McrouterLogger::~McrouterLogger() {
   stop();
 }
 
 bool McrouterLogger::start() {
-  if (running_ || router_.opts().stats_logging_interval == 0) {
+  if (router_.opts().stats_logging_interval == 0) {
     return false;
   }
 
@@ -167,60 +171,26 @@ bool McrouterLogger::start() {
     touchStatsFilepaths_.push_back(std::move(path));
   }
 
-  running_ = true;
-  const std::string threadName = "mcrtr-stats-logger";
-  try {
-    loggerThread_ =
-        std::thread(std::bind(&McrouterLogger::loggerThreadRun, this));
-    folly::setThreadName(loggerThread_.native_handle(), threadName);
-  } catch (const std::system_error& e) {
-    running_ = false;
+  auto scheduler = router_.functionScheduler();
+  if (!scheduler) {
     MC_LOG_FAILURE(
         router_.opts(),
         memcache::failure::Category::kSystemError,
-        "Can not start McrouterLogger thread {}: {}",
-        threadName,
-        e.what());
+        "Scheduler not available, disabling stats logging");
+    return false;
   }
+  scheduler->addFunction(
+      [this]() { log(); },
+      std::chrono::milliseconds(router_.opts().stats_logging_interval),
+      functionHandle_);
 
-  return running_;
+  return true;
 }
 
 void McrouterLogger::stop() noexcept {
-  if (!running_) {
-    return;
+  if (auto scheduler = router_.functionScheduler()) {
+    scheduler->cancelFunctionAndWait(functionHandle_);
   }
-
-  running_ = false;
-  loggerThreadCv_.notify_all();
-  if (loggerThread_.joinable()) {
-    if (getpid() == pid_) {
-      loggerThread_.join();
-    } else {
-      loggerThread_.detach();
-    }
-  }
-}
-
-bool McrouterLogger::running() const {
-  return running_;
-}
-
-void McrouterLogger::loggerThreadRun() {
-  logStartupOptions();
-
-  while (running_) {
-    log();
-    loggerThreadSleep();
-  }
-}
-
-void McrouterLogger::loggerThreadSleep() {
-  std::unique_lock<std::mutex> lock(loggerThreadMutex_);
-  loggerThreadCv_.wait_for(
-      lock,
-      std::chrono::milliseconds(router_.opts().stats_logging_interval),
-      [this]() { return !running_; });
 }
 
 void McrouterLogger::logStartupOptions() {
@@ -231,8 +201,14 @@ void McrouterLogger::logStartupOptions() {
 }
 
 void McrouterLogger::log() {
+  if (!loggedStartupOptions_) {
+    logStartupOptions();
+    loggedStartupOptions_ = true;
+  }
+
   std::vector<stat_t> stats(num_stats);
   prepare_stats(router_, stats.data());
+  append_pool_stats(router_, stats);
 
   folly::dynamic requestStats(folly::dynamic::object());
   for (size_t i = 0; i < router_.opts().num_proxies; ++i) {

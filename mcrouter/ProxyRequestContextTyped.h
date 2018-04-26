@@ -1,13 +1,13 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
+
+#include <folly/Utility.h>
 
 #include "mcrouter/ProxyRequestContext.h"
 #include "mcrouter/ProxyRequestLogger.h"
@@ -91,6 +91,11 @@ class ProxyRequestContextWithInfo : public ProxyRequestContext {
   }
 
   ~ProxyRequestContextWithInfo() override {
+    if (auto poolStats = proxy_.stats().getPoolStats(poolStatIndex_)) {
+      poolStats->incrementFinalResultErrorCount(
+          isErrorResult(finalResult_) ? 1 : 0);
+      poolStats->addTotalDurationSample(nowUs() - startDurationUs_);
+    }
     if (reqComplete_) {
       fiber_local<RouterInfo>::runWithoutLocals(
           [this]() { reqComplete_(*this); });
@@ -102,7 +107,7 @@ class ProxyRequestContextWithInfo : public ProxyRequestContext {
    */
   template <class Request>
   void onReplyReceived(
-      const std::string& poolName,
+      const folly::StringPiece poolName,
       const AccessPoint& ap,
       folly::StringPiece strippedRoutingPrefix,
       const Request& request,
@@ -110,11 +115,16 @@ class ProxyRequestContextWithInfo : public ProxyRequestContext {
       RequestClass requestClass,
       const int64_t startTimeUs,
       const int64_t endTimeUs,
+      const int32_t poolStatIndex,
       const ReplyStatsContext replyStatsContext) {
     if (recording()) {
       return;
     }
 
+    if (auto poolStats = proxy_.stats().getPoolStats(poolStatIndex)) {
+      poolStats->incrementRequestCount(1);
+      poolStats->addDurationSample(endTimeUs - startTimeUs);
+    }
     RequestLoggerContext loggerContext(
         poolName,
         ap,
@@ -140,8 +150,8 @@ class ProxyRequestContextWithInfo : public ProxyRequestContext {
       ProxyRequestPriority priority__)
       : ProxyRequestContext(pr, priority__),
         proxy_(pr),
-        logger_(ProxyRequestLogger<RouterInfo>(pr)),
-        additionalLogger_(AdditionalLogger(&pr)) {}
+        logger_(folly::in_place, pr),
+        additionalLogger_(folly::in_place, *this) {}
 
   Proxy<RouterInfo>& proxy_;
 
@@ -160,6 +170,7 @@ class ProxyRequestContextWithInfo : public ProxyRequestContext {
 
   folly::Optional<ProxyRequestLogger<RouterInfo>> logger_;
   folly::Optional<AdditionalLogger> additionalLogger_;
+  int64_t startDurationUs_{nowUs()};
 };
 
 template <class RouterInfo, class Request>
@@ -190,7 +201,7 @@ class ProxyRequestContextTyped
     sendReply(ReplyT<Request>(std::forward<Args>(args)...));
   }
 
-  void startProcessing() override final;
+  void startProcessing() final;
 
   const ProxyConfig<RouterInfo>& proxyConfig() const {
     assert(!this->recording());

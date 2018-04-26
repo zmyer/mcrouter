@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "McServerRequestContext.h"
@@ -28,7 +26,7 @@ McServerRequestContext::McServerRequestContext(
     bool isEndContext)
     : session_(&s), isEndContext_(isEndContext), noReply_(nr), reqid_(r) {
   if (parent) {
-    asciiState_ = folly::make_unique<AsciiState>();
+    asciiState_ = std::make_unique<AsciiState>();
     asciiState_->parent_ = std::move(parent);
     asciiState_->parent_->recordRequest();
   }
@@ -102,5 +100,15 @@ double McServerRequestContext::getDropProbability() const {
 
   return dropProbability;
 }
+
+ServerLoad McServerRequestContext::getServerLoad() const noexcept {
+  if (session_) {
+    if (const auto& cpuController = session_->getCpuController()) {
+      return cpuController->getServerLoad();
+    }
+  }
+  return ServerLoad::zero();
 }
-} // facebook::memcache
+
+} // memcache
+} // facebook

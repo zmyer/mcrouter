@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include <sys/uio.h>
@@ -22,7 +20,7 @@ namespace test {
 namespace util {
 
 template <class T>
-T serializeAndDeserialize(const T& toSerialize) {
+T serializeAndDeserialize(const T& toSerialize, size_t& bytesWritten) {
   // Serialize the request
   CarbonQueueAppenderStorage storage;
   CarbonProtocolWriter writer(storage);
@@ -32,8 +30,8 @@ T serializeAndDeserialize(const T& toSerialize) {
   folly::IOBuf buf(folly::IOBuf::CREATE, 2048);
   auto* curBuf = &buf;
   const auto iovs = storage.getIovecs();
-  // Skip Caret header iovec (with index 0)
-  for (size_t i = 1; i < iovs.second; ++i) {
+  bytesWritten = 0;
+  for (size_t i = 0; i < iovs.second; ++i) {
     const struct iovec* iov = iovs.first + i;
     size_t written = 0;
     while (written < iov->iov_len) {
@@ -45,6 +43,7 @@ T serializeAndDeserialize(const T& toSerialize) {
           bytesToWrite);
       curBuf->append(bytesToWrite);
       written += bytesToWrite;
+      bytesWritten += written;
 
       if (written < iov->iov_len) {
         // Append new buffer with enough room for remaining data in this
@@ -65,6 +64,11 @@ T serializeAndDeserialize(const T& toSerialize) {
   return deserialized;
 }
 
+template <class T>
+T serializeAndDeserialize(const T& toSerialize) {
+  size_t tmp;
+  return serializeAndDeserialize(toSerialize, tmp);
+}
 } // util
 } // test
 } // carbon

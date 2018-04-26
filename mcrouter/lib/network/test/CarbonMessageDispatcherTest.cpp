@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2015-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include <cstring>
@@ -55,8 +53,7 @@ TEST(CarbonMessage, basic) {
 
   folly::IOBuf body(folly::IOBuf::CREATE, storage.computeBodySize());
   const auto iovs = storage.getIovecs();
-  for (size_t i = 1 /* 0th iov is reserved for header */; i < iovs.second;
-       ++i) {
+  for (size_t i = 0; i < iovs.second; ++i) {
     const struct iovec* iov = iovs.first + i;
     std::memcpy(body.writableTail(), iov->iov_base, iov->iov_len);
     body.append(iov->iov_len);

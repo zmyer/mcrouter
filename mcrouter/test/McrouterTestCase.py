@@ -1,9 +1,7 @@
-# Copyright (c) 2016, Facebook, Inc.
-# All rights reserved.
+# Copyright (c) 2016-present, Facebook, Inc.
 #
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree. An additional grant
-# of patent rights can be found in the PATENTS file in the same directory.
+# This source code is licensed under the MIT license found in the LICENSE
+# file in the root directory of this source tree.
 
 from __future__ import absolute_import
 from __future__ import division
@@ -12,9 +10,14 @@ from __future__ import unicode_literals
 import unittest
 import time
 
-from mcrouter.test.MCProcess import Mcrouter
+from mcrouter.test.MCProcess import Mcrouter, Memcached, MockMemcached
+
 
 class McrouterTestCase(unittest.TestCase):
+    def __init__(self, *args, **kwargs):
+        super(McrouterTestCase, self).__init__(*args, **kwargs)
+        self.use_mock_mc = False
+
     def ensureClassVariables(self):
         if 'open_servers' not in self.__dict__:
             self.open_servers = []
@@ -58,6 +61,9 @@ class McrouterTestCase(unittest.TestCase):
             self.open_mcrouters = []
         self.open_mcrouters.append(mcrouter)
         return mcrouter
+
+    def make_memcached(self):
+        return MockMemcached() if self.use_mock_mc else Memcached()
 
     def get_open_ports(self):
         self.ensureClassVariables()

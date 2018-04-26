@@ -1,20 +1,16 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2015-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
 
 #include <memory>
+#include <utility>
 
 #include <folly/fibers/FiberManager.h>
-
-#include "mcrouter/McrouterFiberContext.h"
-#include "mcrouter/McrouterLogFailure.h"
 
 namespace facebook {
 namespace memcache {
@@ -24,13 +20,19 @@ template <class RouterInfo, class ShadowPolicy>
 template <class Request>
 void ShadowRoute<RouterInfo, ShadowPolicy>::dispatchShadowRequest(
     std::shared_ptr<typename RouterInfo::RouteHandleIf> shadow,
-    std::shared_ptr<Request> adjustedReq) const {
+    std::shared_ptr<Request> adjustedReq,
+    folly::Function<void(const ReplyT<Request>&)> postShadowReplyFn) const {
   folly::fibers::addTask(
-      [ shadow = std::move(shadow), adjustedReq = std::move(adjustedReq) ]() {
+      [shadow = std::move(shadow),
+       adjustedReq = std::move(adjustedReq),
+       postShadowReplyFn = std::move(postShadowReplyFn)]() mutable {
         // we don't want to spool shadow requests
         fiber_local<RouterInfo>::clearAsynclogName();
         fiber_local<RouterInfo>::addRequestClass(RequestClass::kShadow);
-        shadow->route(*adjustedReq);
+        const auto shadowReply = shadow->route(*adjustedReq);
+        if (postShadowReplyFn) {
+          postShadowReplyFn(shadowReply);
+        }
       });
 }
 
@@ -103,8 +105,9 @@ makeShadowRoutes(
   for (size_t i = 0; i < children.size(); ++i) {
     ShadowData<RouterInfo> childrenShadows;
     for (const auto& shadowData : data) {
-      if (shadowData.second->startIndex() <= i &&
-          i < shadowData.second->endIndex()) {
+      if ((shadowData.second->startIndex() <= i &&
+           i < shadowData.second->endIndex()) ||
+          !shadowData.second->keysToShadow().empty()) {
         childrenShadows.push_back(shadowData);
       }
     }

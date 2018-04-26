@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "SessionTestHarness.h"
@@ -74,7 +72,7 @@ class MockAsyncSocket : public folly::AsyncTransportWrapper {
   void shutdownWrite() override {}
   void shutdownWriteNow() override {}
 
-  void setSendTimeout(uint32_t milliseconds) override {}
+  void setSendTimeout(uint32_t /* milliseconds */) override {}
   uint32_t getSendTimeout() const override {
     return 0;
   }
@@ -88,7 +86,7 @@ class MockAsyncSocket : public folly::AsyncTransportWrapper {
   bool error() const override {
     return false;
   }
-  void attachEventBase(folly::EventBase* eventBase) override {}
+  void attachEventBase(folly::EventBase*) override {}
   void detachEventBase() override {}
   folly::EventBase* getEventBase() const override {
     return &harness_.eventBase_;
@@ -98,14 +96,14 @@ class MockAsyncSocket : public folly::AsyncTransportWrapper {
     return false;
   }
 
-  void getLocalAddress(folly::SocketAddress* address) const override {}
-  void getPeerAddress(folly::SocketAddress* address) const override {}
+  void getLocalAddress(folly::SocketAddress*) const override {}
+  void getPeerAddress(folly::SocketAddress*) const override {}
 
   bool isEorTrackingEnabled() const override {
     return false;
   }
 
-  void setEorTracking(bool track) override {}
+  void setEorTracking(bool /* track */) override {}
 
   bool connecting() const override {
     return false;
@@ -135,7 +133,7 @@ class MockAsyncSocket : public folly::AsyncTransportWrapper {
 SessionTestHarness::NoopCallback SessionTestHarness::noopCb;
 
 SessionTestHarness::SessionTestHarness(
-    AsyncMcServerWorkerOptions opts,
+    const AsyncMcServerWorkerOptions& opts,
     McServerSession::StateCallback& cb)
     : session_(McServerSession::create(
           folly::AsyncTransportWrapper::UniquePtr(new MockAsyncSocket(*this)),
@@ -143,7 +141,7 @@ SessionTestHarness::SessionTestHarness(
               McServerOnRequestWrapper<MemcacheRequestHandler<OnRequest>>>(
               OnRequest(*this)),
           cb,
-          std::move(opts),
+          opts,
           nullptr)) {}
 
 void SessionTestHarness::inputPacket(folly::StringPiece p) {

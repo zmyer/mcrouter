@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include <string>
@@ -15,6 +13,7 @@
 
 #include <folly/Benchmark.h>
 #include <folly/experimental/StringKeyedUnorderedMap.h>
+#include <folly/init/Init.h>
 
 #include "mcrouter/lib/fbi/cpp/Trie.h"
 
@@ -94,16 +93,16 @@ void prepareRand() {
   std::string missKeys[] = {"zahskjsdf", "aba", "", "z", "asdjl:dafnsjsdf"};
 
   for (int i = 0; i < 3; ++i) {
-    for (int j = 0; j < keys[i].size(); ++j) {
+    for (size_t j = 0; j < keys[i].size(); ++j) {
       randTrie[i].emplace(keys[i][j], i + j + 1);
       randMap[i].emplace(keys[i][j], i + j + 1);
     }
 
-    for (int j = 0; j < keys[i].size(); ++j) {
+    for (size_t j = 0; j < keys[i].size(); ++j) {
       keysToGet[i].push_back(keys[i][j] + ":hit");
     }
 
-    for (int j = 0; j < 5; ++j) {
+    for (size_t j = 0; j < 5; ++j) {
       keysToGet[i].push_back(missKeys[j]);
     }
 
@@ -114,7 +113,7 @@ void prepareRand() {
 template <class Container>
 void runGet(Container& c, int id) {
   auto& keys = keysToGet[id];
-  for (int i = 0; i < keys.size(); ++i) {
+  for (size_t i = 0; i < keys.size(); ++i) {
     auto r = c.find(keys[i]);
     x += r == c.end() ? 0 : r->second;
   }
@@ -123,7 +122,7 @@ void runGet(Container& c, int id) {
 template <class Container>
 void runGetPrefix(Container& c, int id) {
   auto& keys = keysToGet[id];
-  for (int i = 0; i < keys.size(); ++i) {
+  for (size_t i = 0; i < keys.size(); ++i) {
     auto r = c.findPrefix(keys[i]);
     x += r == c.end() ? 0 : r->second;
   }
@@ -180,8 +179,7 @@ BENCHMARK_RELATIVE(Map_get_prefix2) {
 }
 
 int main(int argc, char** argv) {
-  google::ParseCommandLineFlags(&argc, &argv, true);
-  google::InitGoogleLogging(argv[0]);
+  folly::init(&argc, &argv, true /* removeFlags */);
   prepareRand();
   folly::runBenchmarks();
   LOG(INFO) << "check: " << x;

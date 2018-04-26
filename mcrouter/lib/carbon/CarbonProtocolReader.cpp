@@ -1,15 +1,42 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "CarbonProtocolReader.h"
 
 namespace carbon {
+void CarbonProtocolReader::skipLinearContainer() {
+  const auto pr = readLinearContainerFieldSizeAndInnerType();
+  skipLinearContainerItems(pr);
+}
+
+void CarbonProtocolReader::skipLinearContainerItems(
+    std::pair<FieldType, uint32_t> pr) {
+  const auto fieldType = pr.first;
+  const auto len = pr.second;
+  for (uint32_t i = 0; i < len; ++i) {
+    skip(fieldType);
+  }
+}
+
+void CarbonProtocolReader::skipKVContainer() {
+  const auto pr = readKVContainerFieldSizeAndInnerTypes();
+  skipKVContainerItems(pr);
+}
+
+void CarbonProtocolReader::skipKVContainerItems(
+    std::pair<std::pair<FieldType, FieldType>, uint32_t> pr) {
+  const auto len = pr.second;
+  const auto keyType = pr.first.first;
+  const auto valType = pr.first.second;
+  for (uint32_t i = 0; i < len; ++i) {
+    skip(keyType);
+    skip(valType);
+  }
+}
 
 void CarbonProtocolReader::skip(const FieldType ft) {
   switch (ft) {
@@ -46,12 +73,7 @@ void CarbonProtocolReader::skip(const FieldType ft) {
       break;
     }
     case FieldType::List: {
-      const auto pr = readVectorFieldSizeAndInnerType();
-      const auto fieldType = pr.first;
-      const auto len = pr.second;
-      for (size_t i = 0; i < len; ++i) {
-        skip(fieldType);
-      }
+      skipLinearContainer();
       break;
     }
     case FieldType::Struct: {
@@ -64,6 +86,14 @@ void CarbonProtocolReader::skip(const FieldType ft) {
         skip(fieldType);
       }
       readStructEnd();
+      break;
+    }
+    case FieldType::Set: {
+      skipLinearContainer();
+      break;
+    }
+    case FieldType::Map: {
+      skipKVContainer();
       break;
     }
     default: { break; }

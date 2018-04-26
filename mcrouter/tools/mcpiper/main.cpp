@@ -1,38 +1,39 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
-#include "McPiper.h"
-
 #include <signal.h>
 
 #include <boost/program_options.hpp>
 
 #include <folly/Format.h>
+#include <folly/Singleton.h>
+#include <folly/init/Init.h>
+
+#include "mcrouter/tools/mcpiper/McPiper.h"
 
 using namespace facebook::memcache::mcpiper;
 
 namespace {
 
-McPiper gMcpiper;
+std::unique_ptr<McPiper> gMcpiper;
 
-void cleanExit(int32_t status) {
+[[noreturn]] void cleanExit(int32_t status) {
   for (auto sig : {SIGINT, SIGABRT, SIGQUIT, SIGPIPE, SIGWINCH}) {
     signal(sig, SIG_IGN);
   }
 
   if (status >= 0) {
     std::cerr << "exit" << std::endl
-              << gMcpiper.stats().totalMessages.load() << " messages received, "
-              << gMcpiper.stats().printedMessages.load() << " printed."
+              << gMcpiper->stats().totalMessages.load()
+              << " messages received, "
+              << gMcpiper->stats().printedMessages.load() << " printed."
               << std::endl;
-    auto beforeCompress = gMcpiper.stats().numBytesBeforeCompression.load();
-    auto afterCompress = gMcpiper.stats().numBytesAfterCompression.load();
+    auto beforeCompress = gMcpiper->stats().numBytesBeforeCompression.load();
+    auto afterCompress = gMcpiper->stats().numBytesAfterCompression.load();
     if (beforeCompress > 0 && afterCompress > 0) {
       std::cerr << "Compression ratio = "
                 << static_cast<double>(afterCompress) / beforeCompress
@@ -112,7 +113,10 @@ Settings parseOptions(int argc, char** argv) {
       "raw",
       po::bool_switch(&settings.raw)->default_value(false),
       "Prints raw data. Format: firstly size(8 bytes) then message. "
-      "ASCII protocol is not supported");
+      "ASCII protocol is not supported")(
+      "script",
+      po::bool_switch(&settings.script)->default_value(false),
+      "Machine-readable JSON output (useful for post-processing).");
 
   // Positional arguments - hidden from the help message
   po::options_description hiddenOpts("Hidden options");
@@ -170,6 +174,13 @@ Settings parseOptions(int argc, char** argv) {
 } // anonymous namespace
 
 int main(int argc, char** argv) {
+  // Just give the binary name to folly::init() because we use
+  // boost::program_options instead of gflags.
+  int tempArgc = 1;
+  folly::init(&tempArgc, &argv, false);
+
+  gMcpiper = std::make_unique<McPiper>();
+
   struct sigaction sa;
   memset(&sa, 0, sizeof(struct sigaction));
   sa.sa_handler = cleanExit;
@@ -177,10 +188,6 @@ int main(int argc, char** argv) {
     sigaction(sig, &sa, nullptr);
   }
 
-  google::InitGoogleLogging(argv[0]);
-
-  gMcpiper.run(parseOptions(argc, argv));
+  gMcpiper->run(parseOptions(argc, argv));
   cleanExit(0);
-
-  return 0;
 }

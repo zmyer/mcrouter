@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "stats.h"
@@ -19,6 +17,7 @@
 
 #include <folly/Conv.h>
 #include <folly/Range.h>
+#include <folly/experimental/StringKeyedUnorderedMap.h>
 #include <folly/json.h>
 
 #include "mcrouter/CarbonRouterInstanceBase.h"
@@ -85,9 +84,9 @@ struct ServerStat {
     folly::format(" pending_reqs:{}", pendingRequestsCount).appendTo(res);
     folly::format(" inflight_reqs:{}", inflightRequestsCount).appendTo(res);
     if (isHardTko) {
-      folly::format(" hard_tko; ").appendTo(res);
+      res.append(" hard_tko; ");
     } else if (isSoftTko) {
-      folly::format(" soft_tko; ").appendTo(res);
+      res.append(" soft_tko; ");
     }
     if (cntRetransPerKByte > 0) {
       double avgRetransPerKByte = sumRetransPerKByte / cntRetransPerKByte;
@@ -231,10 +230,10 @@ static std::string max_max_stat_to_str(ProxyBase* proxy, int idx) {
  *
  * @eturn the length of the string written, excluding terminator
  */
-static std::string stat_to_str(const stat_t* stat, void* ptr) {
+static std::string stat_to_str(const stat_t* stat, void* /* ptr */) {
   switch (stat->type) {
     case stat_string:
-      return stat->data.string;
+      return stat->data.string ? stat->data.string : "";
     case stat_uint64:
       return folly::to<std::string>(stat->data.uint64);
     case stat_int64:
@@ -338,6 +337,32 @@ static int get_proc_stat(pid_t pid, proc_stat_data_t* data) {
   return 0;
 }
 
+void append_pool_stats(
+    CarbonRouterInstanceBase& router,
+    std::vector<stat_t>& stats) {
+  folly::StringKeyedUnorderedMap<stat_t> mergedPoolStatsMap;
+
+  auto mergeMaps = [&mergedPoolStatsMap](
+                       folly::StringKeyedUnorderedMap<stat_t>&& poolStatMap) {
+    for (auto& poolStatMapEntry : poolStatMap) {
+      auto it = mergedPoolStatsMap.find(poolStatMapEntry.first);
+      if (it != mergedPoolStatsMap.end()) {
+        it->second.data.uint64 += poolStatMapEntry.second.data.uint64;
+      } else {
+        mergedPoolStatsMap.insert(std::move(poolStatMapEntry));
+      }
+    }
+  };
+
+  for (size_t j = 0; j < router.opts().num_proxies; ++j) {
+    auto pr = router.getProxyBase(j);
+    mergeMaps(pr->stats().getAggregatedPoolStatsMap());
+  }
+  for (const auto& mergedPoolStatMapEntry : mergedPoolStatsMap) {
+    stats.emplace_back(mergedPoolStatMapEntry.second);
+  }
+}
+
 void prepare_stats(CarbonRouterInstanceBase& router, stat_t* stats) {
   init_stats(stats);
 
@@ -430,6 +455,8 @@ void prepare_stats(CarbonRouterInstanceBase& router, stat_t* stats) {
   stats[config_last_success_stat].data.uint64 = config_last_success;
   stats[config_last_attempt_stat].data.uint64 = router.lastConfigAttempt();
   stats[config_failures_stat].data.uint64 = router.configFailures();
+  stats[configs_from_disk_stat].data.uint64 =
+      static_cast<uint64_t>(router.configuredFromDisk());
 
   stats[pid_stat].data.int64 = getpid();
   stats[parent_pid_stat].data.int64 = getppid();
@@ -552,9 +579,9 @@ McStatsReply stats_reply(ProxyBase* proxy, folly::StringPiece group_str) {
     return errorReply;
   }
 
-  stat_t stats[num_stats];
+  std::vector<stat_t> stats(num_stats);
 
-  prepare_stats(proxy->router(), stats);
+  prepare_stats(proxy->router(), stats.data());
 
   for (unsigned int ii = 0; ii < num_stats; ii++) {
     stat_t* stat = &stats[ii];
@@ -570,6 +597,7 @@ McStatsReply stats_reply(ProxyBase* proxy, folly::StringPiece group_str) {
       }
     }
   }
+  append_pool_stats(proxy->router(), stats);
 
   if (groups & (mcproxy_stats | all_stats | detailed_stats | ods_stats)) {
     folly::dynamic requestStats(folly::dynamic::object());

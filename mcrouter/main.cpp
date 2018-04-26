@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include <getopt.h>
@@ -27,16 +25,15 @@
 #include <glog/logging.h>
 
 #include <folly/Format.h>
-#include <folly/Memory.h>
 #include <folly/Range.h>
+#include <folly/Singleton.h>
 
 #include "mcrouter/CarbonRouterInstance.h"
 #include "mcrouter/McrouterLogFailure.h"
 #include "mcrouter/Proxy.h"
+#include "mcrouter/RouterRegistry.h"
 #include "mcrouter/Server.h"
 #include "mcrouter/config.h"
-#include "mcrouter/lib/network/gen/Memcache.h"
-#include "mcrouter/lib/network/gen/MemcacheRouterInfo.h"
 #include "mcrouter/options.h"
 #include "mcrouter/standalone_options.h"
 #include "mcrouter/stats.h"
@@ -59,7 +56,7 @@ static McrouterStandaloneOptions standaloneOpts;
 
 #define print_usage(opt, desc) fprintf(stderr, "\t%*s%s\n", -49, opt, desc)
 
-static void print_usage_and_die(char* progname, int errorCode) {
+[[noreturn]] static void print_usage_and_die(char* progname, int errorCode) {
   fprintf(
       stderr,
       "%s\n"
@@ -197,11 +194,9 @@ static void parse_options(
 
       case 'h':
         print_usage_and_die(argv[0], /* errorCode */ 0);
-        break;
       case 'V':
         printf("%s\n", MCROUTER_PACKAGE_STRING);
         exit(0);
-        break;
 
       case 0:
       default:
@@ -343,7 +338,36 @@ void notify_command_line(int argc, char** argv) {
   free(cmd_line);
 }
 
+template <class RouterInfo, template <class> class RequestHandler>
+void validateConfigAndExit() {
+  try {
+    auto router =
+        CarbonRouterInstance<RouterInfo>::init("standalone-validate", opts);
+    if (router == nullptr) {
+      throw std::runtime_error("Couldn't create mcrouter.");
+    }
+  } catch (const std::exception& e) {
+    LOG(ERROR) << "CRITICAL: Failed to initialize mcrouter: " << e.what();
+    exit(kExitStatusUnrecoverableError);
+  } catch (...) {
+    LOG(ERROR) << "CRITICAL: Failed to initialize mcrouter";
+    exit(kExitStatusUnrecoverableError);
+  }
+
+  /* Exit immediately with good code */
+  _exit(0);
+}
+
+template <class RouterInfo, template <class> class RequestHandler>
+void run() {
+  LOG(INFO) << "Starting " << RouterInfo::name << " router";
+  if (!runServer<RouterInfo, RequestHandler>(standaloneOpts, opts)) {
+    exit(kExitStatusTransientError);
+  }
+}
+
 int main(int argc, char** argv) {
+  folly::SingletonVault::singleton()->registrationComplete();
   FLAGS_v = 1;
   FLAGS_logtostderr = 1;
   google::InitGoogleLogging(argv[0]);
@@ -362,6 +386,8 @@ int main(int argc, char** argv) {
       unrecognized_options,
       &validate_configs,
       &flavor);
+
+  standalonePreInitFromCommandLineOpts(cmdline_st_option_dict);
 
   if (flavor.empty()) {
     option_dict = cmdline_option_dict;
@@ -449,34 +475,22 @@ int main(int argc, char** argv) {
     opts.router_name = port_str.c_str();
   }
 
-  if (validate_configs != ValidateConfigMode::NONE) {
-    failure::addHandler(failure::handlers::throwLogicError());
+  try {
+    if (validate_configs != ValidateConfigMode::NONE) {
+      failure::addHandler(failure::handlers::throwLogicError());
 
-    if (validate_configs == ValidateConfigMode::EXIT) {
-      try {
-        auto router = CarbonRouterInstance<MemcacheRouterInfo>::init(
-            "standalone-validate", opts);
-        if (router == nullptr) {
-          throw std::runtime_error("Couldn't create mcrouter");
-        }
-      } catch (const std::exception& e) {
-        LOG(ERROR) << "CRITICAL: Failed to initialize mcrouter: " << e.what();
-        exit(kExitStatusUnrecoverableError);
-      } catch (...) {
-        LOG(ERROR) << "CRITICAL: Failed to initialize mcrouter";
-        exit(kExitStatusUnrecoverableError);
+      if (validate_configs == ValidateConfigMode::EXIT) {
+        CALL_BY_ROUTER_NAME(
+            standaloneOpts.carbon_router_name, validateConfigAndExit);
       }
-
-      /* Exit immediately with good code */
-      _exit(0);
     }
-  }
 
-  standaloneInit(opts, standaloneOpts);
+    standaloneInit(opts, standaloneOpts);
 
-  set_standalone_args(commandArgs);
-  if (!runServer<MemcacheRouterInfo, MemcacheRequestHandler>(
-          standaloneOpts, opts)) {
-    exit(kExitStatusTransientError);
+    set_standalone_args(commandArgs);
+    CALL_BY_ROUTER_NAME(standaloneOpts.carbon_router_name, run);
+  } catch (const std::invalid_argument& ia) {
+    LOG(ERROR) << "Error starting mcrouter: " << ia.what();
+    exit(EXIT_FAILURE);
   }
 }

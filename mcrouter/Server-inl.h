@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include <signal.h>
@@ -70,13 +68,9 @@ void serverLoop(
   /* TODO(libevent): the only reason this is not simply evb.loop() is
      because we need to call asox stuff on every loop iteration.
      We can clean this up once we convert everything to EventBase */
-  while (worker.isAlive() || worker.writesPending() ||
-         proxy->fiberManager().hasTasks()) {
+  while (worker.isAlive() || worker.writesPending()) {
     evb.loopOnce();
   }
-
-  // destroy proxy on proxy thread
-  router.releaseProxy(threadId);
 }
 
 } // detail
@@ -94,9 +88,12 @@ bool runServer(
   } else {
     opts.ports = standaloneOpts.ports;
     opts.sslPorts = standaloneOpts.ssl_ports;
+    opts.tlsTicketKeySeedPath = standaloneOpts.tls_ticket_key_seed_path;
     opts.pemCertPath = mcrouterOpts.pem_cert_path;
     opts.pemKeyPath = mcrouterOpts.pem_key_path;
     opts.pemCaPath = mcrouterOpts.pem_ca_path;
+    opts.tfoEnabledForSsl = mcrouterOpts.enable_ssl_tfo;
+    opts.tfoQueueSize = standaloneOpts.tfo_queue_size;
   }
 
   opts.numThreads = mcrouterOpts.num_proxies;
@@ -111,6 +108,13 @@ bool runServer(
     opts.worker.debugFifoPath = getServerDebugFifoFullPath(mcrouterOpts);
   }
 
+  if (standaloneOpts.server_load_interval_ms > 0) {
+    opts.cpuControllerOpts.dataCollectionInterval =
+        std::chrono::milliseconds(standaloneOpts.server_load_interval_ms);
+    opts.cpuControllerOpts.enableServerLoad = true;
+    opts.cpuControllerOpts.target = 0; // Disable drop probability.
+  }
+
   /* Default to one read per event to help latency-sensitive workloads.
      We can make this an option if this needs to be adjusted. */
   opts.worker.maxReadsPerEvent = 1;
@@ -121,9 +125,25 @@ bool runServer(
     AsyncMcServer server(opts);
     server.installShutdownHandler({SIGINT, SIGTERM});
 
-    auto router = CarbonRouterInstance<RouterInfo>::init(
-        "standalone", mcrouterOpts, server.eventBases());
+    CarbonRouterInstance<RouterInfo>* router = nullptr;
 
+    SCOPE_EXIT {
+      if (router) {
+        router->shutdown();
+      }
+      server.join();
+
+      LOG(INFO) << "Shutting down";
+
+      freeAllRouters();
+
+      if (!opts.unixDomainSockPath.empty()) {
+        std::remove(opts.unixDomainSockPath.c_str());
+      }
+    };
+
+    router = CarbonRouterInstance<RouterInfo>::init(
+        "standalone", mcrouterOpts, server.eventBases());
     if (router == nullptr) {
       LOG(ERROR) << "CRITICAL: Failed to initialize mcrouter!";
       return false;
@@ -140,6 +160,7 @@ bool runServer(
       initCompression(*router);
     }
 
+    folly::Baton<> shutdownBaton;
     server.spawn(
         [router, &standaloneOpts](
             size_t threadId,
@@ -148,17 +169,9 @@ bool runServer(
           detail::serverLoop<RouterInfo, RequestHandler>(
               *router, threadId, evb, worker, standaloneOpts);
         },
-        [router]() { router->shutdown(); });
+        [&shutdownBaton]() { shutdownBaton.post(); });
 
-    server.join();
-
-    LOG(INFO) << "Shutting down";
-
-    freeAllRouters();
-
-    if (!opts.unixDomainSockPath.empty()) {
-      std::remove(opts.unixDomainSockPath.c_str());
-    }
+    shutdownBaton.wait();
   } catch (const std::exception& e) {
     LOG(ERROR) << e.what();
     return false;

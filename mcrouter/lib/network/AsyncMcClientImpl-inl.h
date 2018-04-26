@@ -1,14 +1,11 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
-#include <folly/Memory.h>
-
+#include "mcrouter/lib/Reply.h"
 #include "mcrouter/lib/network/FBTrace.h"
 #include "mcrouter/lib/network/ReplyStatsContext.h"
 
@@ -20,13 +17,17 @@ ReplyT<Request> AsyncMcClientImpl::sendSync(
     const Request& request,
     std::chrono::milliseconds timeout,
     ReplyStatsContext* replyContext) {
-  auto selfPtr = selfPtr_.lock();
-  // shouldn't happen.
-  assert(selfPtr);
+  DestructorGuard dg(this);
+
   assert(folly::fibers::onFiber());
 
   if (maxPending_ != 0 && getPendingRequestCount() >= maxPending_) {
-    return ReplyT<Request>(mc_res_local_error);
+    return createReply<Request>(
+        ErrorReply,
+        folly::sformat(
+            "Max pending requests ({}) reached for destination \"{}\".",
+            maxPending_,
+            connectionOptions_.accessPoint->toHostPortString()));
   }
 
   // We need to send fbtrace before serializing, or otherwise we are going to
@@ -37,7 +38,6 @@ ReplyT<Request> AsyncMcClientImpl::sendSync(
       request,
       nextMsgId_,
       connectionOptions_.accessPoint->getProtocol(),
-      std::move(selfPtr),
       queue_,
       [](ParserT& parser) { parser.expectNext<Request>(); },
       requestStatusCallbacks_.onStateChange,
@@ -88,5 +88,6 @@ template <>
 inline double AsyncMcClientImpl::getDropProbability<McDeleteRequest>() const {
   return parser_ ? parser_->getDropProbability() : 0.0;
 }
-}
-} // facebook::memcache
+
+} // memcache
+} // facebook

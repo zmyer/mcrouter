@@ -1,17 +1,19 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
 
+#include <atomic>
 #include <iostream>
 
+#include <folly/io/async/EventBase.h>
+
 #include "mcrouter/tools/mcpiper/Config.h"
+#include "mcrouter/tools/mcpiper/FifoReader.h"
 #include "mcrouter/tools/mcpiper/MessagePrinter.h"
 
 namespace facebook {
@@ -39,6 +41,7 @@ struct Settings {
   size_t verboseLevel{0};
   std::string protocol;
   bool raw{false};
+  bool script{false};
 };
 
 class McPiper {
@@ -49,11 +52,13 @@ class McPiper {
 
   const MessagePrinter::Stats& stats() const noexcept {
     return messagePrinter_->stats();
-  };
+  }
 
  private:
+  folly::EventBase eventBase_;
   std::unique_ptr<MessagePrinter> messagePrinter_;
-  bool running_{false};
+  std::unique_ptr<FifoReaderManager> fifoReaderManager_;
+  std::atomic<bool> running_{false};
 };
 
 } // mcpiper

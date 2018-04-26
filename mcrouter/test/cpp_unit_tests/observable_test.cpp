@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include <atomic>
@@ -12,8 +10,6 @@
 #include <thread>
 
 #include <gtest/gtest.h>
-
-#include <folly/Memory.h>
 
 #include "mcrouter/Observable.h"
 
@@ -23,7 +19,7 @@ using facebook::memcache::mcrouter::Observable;
 struct NoCopy {
   int x;
 
-  explicit NoCopy(int x_ = 0) : x(x_){};
+  explicit NoCopy(int x_ = 0) : x(x_){}
   NoCopy(const NoCopy&) = delete;
   NoCopy(NoCopy&&) = default;
 
@@ -129,10 +125,10 @@ TEST(Observable, rand) {
   std::unique_ptr<std::thread> producer;
 
   for (auto i = 0; i < 16; ++i) {
-    consumer[i] = folly::make_unique<std::thread>(consumerFunc);
+    consumer[i] = std::make_unique<std::thread>(consumerFunc);
   }
 
-  producer = folly::make_unique<std::thread>(producerFunc);
+  producer = std::make_unique<std::thread>(producerFunc);
 
   producer->join();
   for (auto i = 0; i < 16; ++i) {

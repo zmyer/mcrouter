@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2015-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -25,9 +23,11 @@
 #include "mcrouter/lib/RouteHandleTraverser.h"
 #include "mcrouter/lib/config/RouteHandleBuilder.h"
 #include "mcrouter/lib/config/RouteHandleFactory.h"
+#include "mcrouter/lib/fbi/cpp/TypeList.h"
 #include "mcrouter/lib/fbi/cpp/util.h"
 #include "mcrouter/lib/mc/msg.h"
 #include "mcrouter/lib/mc/protocol.h"
+#include "mcrouter/lib/network/CarbonMessageList.h"
 #include "mcrouter/lib/network/gen/Memcache.h"
 
 namespace facebook {
@@ -98,8 +98,9 @@ class ModifyKeyRoute {
   const bool modifyInplace_;
   const folly::Optional<std::string> keyReplace_;
 
+  template <class StringLike>
   folly::Optional<std::string> getModifiedKey(
-      const carbon::Keys<folly::IOBuf>& reqKey) const {
+      const carbon::Keys<StringLike>& reqKey) const {
     folly::StringPiece rp = routingPrefix_.hasValue() ? routingPrefix_.value()
                                                       : reqKey.routingPrefix();
 
@@ -123,7 +124,9 @@ class ModifyKeyRoute {
   template <class Request>
   ReplyT<Request> routeReqWithKey(const Request& req, folly::StringPiece key)
       const {
-    auto err = isKeyValid(key);
+    constexpr bool kIsMemcacheRequest =
+        ListContains<McRequestList, Request>::value;
+    const auto err = isKeyValid<kIsMemcacheRequest>(key);
     if (err != mc_req_err_valid) {
       return createReply<Request>(
           ErrorReply,
@@ -160,7 +163,7 @@ typename RouterInfo::RouteHandlePtr makeModifyKeyRoute(
   std::string keyPrefix;
   if (auto jkeyPrefix = json.get_ptr("ensure_key_prefix")) {
     keyPrefix = jkeyPrefix->getString();
-    auto err = isKeyValid(keyPrefix);
+    auto err = isKeyValid<true /* DoSpaceAndCtrlCheck */>(keyPrefix);
     checkLogic(
         keyPrefix.empty() || err == mc_req_err_valid,
         "ModifyKeyRoute: invalid key prefix '{}', {}",
@@ -171,7 +174,7 @@ typename RouterInfo::RouteHandlePtr makeModifyKeyRoute(
   folly::Optional<std::string> keyReplace;
   if (auto jkeyReplace = json.get_ptr("replace_key_prefix")) {
     keyReplace = jkeyReplace->getString();
-    auto err = isKeyValid(keyReplace.value());
+    auto err = isKeyValid<true /* DoSpaceAndCtrlCheck */>(keyReplace.value());
     checkLogic(
         keyReplace.value().empty() || err == mc_req_err_valid,
         "ModifyKeyRoute: invalid key prefix '{}', {}",

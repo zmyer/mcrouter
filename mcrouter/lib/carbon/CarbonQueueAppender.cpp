@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "mcrouter/lib/carbon/CarbonQueueAppender.h"
@@ -21,7 +19,7 @@ void CarbonQueueAppenderStorage::coalesce() {
 
   canUsePreviousIov_ = false;
   nIovsUsed_ = 1; // headerBuf_ always considered used
-  storageIdx_ = 0;
+  storageIdx_ = kMaxHeaderLength;
 
   size_t newCapacity = 0;
   // coalesce() should always be triggered before writing header

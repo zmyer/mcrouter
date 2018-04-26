@@ -1,15 +1,16 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2015-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
 
 #include <stdint.h>
+#include <cassert>
+
+#include <folly/ScopeGuard.h>
 
 namespace facebook {
 namespace memcache {
@@ -26,9 +27,32 @@ class ListenSocket {
     return port_;
   }
 
+  /*
+   * Get the socket fd. Note that the socket will be closed in
+   * destructor ~ListenSocket. If the caller of this funciton intends to close
+   * this fd, then use the other function releaseSocketFd()
+   */
   int getSocketFd() const {
+    assert(socketFd_ != -1);
     return socketFd_;
   }
+
+  /*
+   * Get the socket fd. Note that the caller of this function is responsible
+   * to close this fd
+   */
+  int releaseSocketFd() {
+    assert(socketFd_ != -1);
+    SCOPE_EXIT {
+      socketFd_ = -1;
+    };
+    return socketFd_;
+  }
+
+  /**
+   * Set close on exec flag on or off, according to `value'.
+   */
+  void setCloseOnExec(bool value);
 
   // movable, but not copyable
   ListenSocket(ListenSocket&& other) noexcept;

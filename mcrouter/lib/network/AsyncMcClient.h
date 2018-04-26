@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -14,16 +12,17 @@
 #include <utility>
 
 #include "mcrouter/lib/Operation.h"
+#include "mcrouter/lib/network/AsyncMcClientImpl.h"
 #include "mcrouter/lib/network/ConnectionOptions.h"
 
 namespace folly {
+class AsyncSocket;
 class EventBase;
 } // folly
 
 namespace facebook {
 namespace memcache {
 
-class AsyncMcClientImpl;
 struct ReplyStatsContext;
 
 /**
@@ -37,7 +36,14 @@ struct ReplyStatsContext;
  */
 class AsyncMcClient {
  public:
+  using ConnectionDownReason = AsyncMcClientImpl::ConnectionDownReason;
+  using FlushList = AsyncMcClientImpl::FlushList;
+
   AsyncMcClient(folly::EventBase& eventBase, ConnectionOptions options);
+  AsyncMcClient(folly::VirtualEventBase& eventBase, ConnectionOptions options);
+  ~AsyncMcClient() {
+    base_->setFlushList(nullptr);
+  }
 
   /**
    * Close connection and fail all outstanding requests immediately.
@@ -50,16 +56,17 @@ class AsyncMcClient {
    * @param onUp  will be called whenever client successfully connects to the
    *              server. Will be called immediately if we're already connected.
    *              Can be nullptr.
-   * @param onDown  will be called whenever connection goes down. Will not be
-   *                called if the connection is already DOWN.
+   * @param onDown  will be called whenever connection goes down. Will be passed
+   *                explanation about why the connection went down.
+   *                Will not be called if the connection is already DOWN.
    *                Can be nullptr.
    * Note: those callbacks may be called even after the client was destroyed.
    *       This will happen in case when the client is destroyed and there are
    *       some requests left, for wich reply callback wasn't called yet.
    */
   void setStatusCallbacks(
-      std::function<void()> onUp,
-      std::function<void(bool aborting)> onDown);
+      std::function<void(const folly::AsyncSocket&)> onUp,
+      std::function<void(ConnectionDownReason)> onDown);
 
   /**
    * Set callbacks for when requests state change.
@@ -146,10 +153,18 @@ class AsyncMcClient {
   template <class Request>
   double getDropProbability() const;
 
+  /**
+   * Set external queue for managing flush callbacks. By default we'll use
+   * EventBase as a manager of these callbacks.
+   */
+  void setFlushList(FlushList* flushList) {
+    base_->setFlushList(flushList);
+  }
+
  private:
   std::shared_ptr<AsyncMcClientImpl> base_;
 };
-}
-} // facebook::memcache
+} // memcache
+} // facebook
 
 #include "AsyncMcClient-inl.h"

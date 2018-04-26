@@ -1,15 +1,13 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "MessagePrinter.h"
 
-#include <folly/Bits.h>
+#include <folly/lang/Bits.h>
 
 namespace facebook {
 namespace memcache {
@@ -118,16 +116,30 @@ std::string MessagePrinter::serializeConnectionDetails(
   std::string out;
 
   if (!from.empty()) {
-    out.append(describeAddress(from));
+    if (options_.script) {
+      out.append(
+          folly::sformat(",\n  \"from\": \"{}\"", describeAddress(from)));
+    } else {
+      out.append(describeAddress(from));
+    }
   }
-  if (!from.empty() || !to.empty()) {
+  if (!options_.script && (!from.empty() || !to.empty())) {
     out.append(" -> ");
   }
   if (!to.empty()) {
-    out.append(describeAddress(to));
+    if (options_.script) {
+      out.append(folly::sformat(",\n  \"to\": \"{}\"", describeAddress(to)));
+    } else {
+      out.append(describeAddress(to));
+    }
   }
   if ((!from.empty() || !to.empty()) && protocol != mc_unknown_protocol) {
-    out.append(folly::sformat(" ({})", mc_protocol_to_string(protocol)));
+    if (options_.script) {
+      out.append(folly::sformat(
+          ",\n  \"protocol\": \"{}\"", mc_protocol_to_string(protocol)));
+    } else {
+      out.append(folly::sformat(" ({})", mc_protocol_to_string(protocol)));
+    }
   }
 
   return out;
@@ -139,18 +151,26 @@ std::string MessagePrinter::serializeMessageHeader(
     const std::string& key) {
   std::string out;
 
-  out.append(messageName.data());
-  if (result != mc_res_unknown) {
-    if (out.size() > 0) {
-      out.push_back(' ');
+  if (options_.script) {
+    out.append(folly::sformat("\"type\": \"{}\"", messageName.data()));
+    if (result != mc_res_unknown) {
+      out.append(
+          folly::sformat(",\n  \"result\": \"{}\"", mc_res_to_string(result)));
     }
-    out.append(mc_res_to_string(result));
-  }
-  if (key.size()) {
-    if (out.size() > 0) {
-      out.push_back(' ');
+    if (!key.empty()) {
+      out.append(
+          folly::sformat(",\n  \"key\": \"{}\"", folly::backslashify(key)));
     }
-    out.append(folly::backslashify(key));
+  } else {
+    out.append(messageName.data());
+    if (result != mc_res_unknown) {
+      out.push_back(' ');
+      out.append(mc_res_to_string(result));
+    }
+    if (!key.empty()) {
+      out.push_back(' ');
+      out.append(folly::backslashify(key));
+    }
   }
 
   return out;

@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2015-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -23,6 +21,7 @@
 #include <folly/io/async/AsyncSocketException.h>
 
 #include "mcrouter/lib/debug/ConnectionFifoProtocol.h"
+#include "mcrouter/lib/network/gen/MemcacheRouterInfo.h"
 
 namespace folly {
 class EventBase;
@@ -34,12 +33,15 @@ namespace memcache {
 class FifoReader;
 
 /**
- * Function called when a message is completely read from the fifo.
+ * Function called when a message packet is completely read from the fifo.
  *
  * @param connectionId  Id of the connection.
  * @param packetId      Id of the packet.
  * @param from          Address of the endpoint that sent the message.
  * @param to            Address of the endpoint that received the message.
+ * @param typeId        Id of the type of the request/reply.
+ * @param msgStartTime  The time the request/reply was received/send.
+ * @param routerName    Generated router name that helps identify protocol.
  * @param data          The data of the message.
  */
 using MessageReadyFn = std::function<void(
@@ -49,6 +51,7 @@ using MessageReadyFn = std::function<void(
     folly::SocketAddress to,
     uint32_t typeId,
     uint64_t msgStartTime,
+    std::string routerName,
     folly::ByteRange data)>;
 
 class FifoReadCallback : public folly::AsyncReader::ReadCallback {
@@ -57,10 +60,10 @@ class FifoReadCallback : public folly::AsyncReader::ReadCallback {
       std::string fifoName,
       const MessageReadyFn& messageReady) noexcept;
 
-  void getReadBuffer(void** bufReturn, size_t* lenReturn) override final;
-  void readDataAvailable(size_t len) noexcept override final;
-  void readEOF() noexcept override final;
-  void readErr(const folly::AsyncSocketException& ex) noexcept override final;
+  void getReadBuffer(void** bufReturn, size_t* lenReturn) final;
+  void readDataAvailable(size_t len) noexcept final;
+  void readEOF() noexcept final;
+  void readErr(const folly::AsyncSocketException& ex) noexcept final;
 
  private:
   static constexpr uint64_t kMinSize{256};
@@ -75,8 +78,12 @@ class FifoReadCallback : public folly::AsyncReader::ReadCallback {
   // Addresses of the endpoints of the message currently being read.
   folly::SocketAddress from_;
   folly::SocketAddress to_;
+
   uint32_t typeId_{0};
   uint64_t msgStartTime_{0};
+
+  // Name of the carbon router.
+  std::string carbonRouterName_;
 
   void forwardMessage(
       const PacketHeader& header,
@@ -113,6 +120,11 @@ class FifoReaderManager {
   FifoReaderManager(const FifoReaderManager&) = delete;
   FifoReaderManager& operator=(const FifoReaderManager&) = delete;
 
+  /**
+   * Unregisters all fifo readers
+   */
+  void unregisterCallbacks();
+
  private:
   using FifoReader = std::pair<
       folly::AsyncPipeReader::UniquePtr,
@@ -128,5 +140,5 @@ class FifoReaderManager {
   std::vector<std::string> getMatchedFiles() const;
   void runScanDirectory();
 };
-}
-} // facebook::memcache
+} // memcache
+} // facebook

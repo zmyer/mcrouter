@@ -1,13 +1,12 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
-#include <folly/Memory.h>
+#include <memory>
+
 #include <folly/Random.h>
 #include <folly/fibers/EventBaseLoopController.h>
 
@@ -23,21 +22,23 @@ template <class RouterInfo>
 ProxyBase::ProxyBase(
     CarbonRouterInstanceBase& rtr,
     size_t id,
-    folly::EventBase& evb,
+    folly::VirtualEventBase& evb,
     RouterInfo /* tag */)
     : router_(rtr),
       id_(id),
       eventBase_(evb),
       fiberManager_(
           typename fiber_local<RouterInfo>::ContextTypeTag(),
-          folly::make_unique<folly::fibers::EventBaseLoopController>(),
+          std::make_unique<folly::fibers::EventBaseLoopController>(),
           getFiberManagerOptions(router_.opts())),
       asyncLog_(router_.opts()),
-      destinationMap_(folly::make_unique<ProxyDestinationMap>(this)) {
+      stats_(router_.getStatsEnabledPools()),
+      flushCallback_(*this),
+      destinationMap_(std::make_unique<ProxyDestinationMap>(this)) {
   // Setup a full random seed sequence
   folly::Random::seed(randomGenerator_);
 
-  statsContainer_ = folly::make_unique<ProxyStatsContainer>(*this);
+  statsContainer_ = std::make_unique<ProxyStatsContainer>(*this);
 }
 
 } // mcrouter

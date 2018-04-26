@@ -1,13 +1,13 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "MemoryController.h"
+
+#include <cassert>
 
 #include <folly/File.h>
 #include <folly/FileUtil.h>
@@ -16,9 +16,6 @@ namespace facebook {
 namespace memcache {
 
 namespace {
-
-// The interval of reading /proc/stat and /proc/meminfo in milliseconds
-constexpr double kReadProcInterval = 10;
 
 bool readMemInfo(std::vector<uint64_t>& curArray) {
   auto memStatFile = folly::File("/proc/meminfo");
@@ -45,17 +42,15 @@ bool readMemInfo(std::vector<uint64_t>& curArray) {
 } // anonymous
 
 MemoryController::MemoryController(
-    uint64_t target,
+    const CongestionControllerOptions& opts,
     folly::EventBase& evb,
-    std::chrono::milliseconds delay,
     size_t queueCapacity)
     : evb_(evb),
-      target_(target),
-      logic_(std::make_shared<CongestionController>(
-          target,
-          delay,
-          evb,
-          queueCapacity)) {}
+      target_(opts.target),
+      dataCollectionInterval_(opts.dataCollectionInterval),
+      logic_(std::make_shared<CongestionController>(opts, evb, queueCapacity)) {
+  assert(opts.shouldEnable());
+}
 
 double MemoryController::getDropProbability() const {
   return logic_->getDropProbability();
@@ -101,7 +96,8 @@ void MemoryController::memLoggingFn() {
   }
   logic_->updateValue(memUtil);
   auto self = shared_from_this();
-  evb_.runAfterDelay([this, self]() { memLoggingFn(); }, kReadProcInterval);
+  evb_.runAfterDelay(
+      [this, self]() { memLoggingFn(); }, dataCollectionInterval_.count());
 }
 
 } // memcache

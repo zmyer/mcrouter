@@ -1,19 +1,15 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
 
-#include <memory>
 #include <string>
 
 #include <folly/Format.h>
-#include <folly/Memory.h>
 #include <folly/Optional.h>
 #include <folly/ScopeGuard.h>
 #include <folly/fibers/FiberManager.h>
@@ -62,40 +58,38 @@ class DestinationRoute {
         timeout_.count());
   }
 
-  std::string keyWithFailoverTag(folly::StringPiece fullKey) const {
-    const char* const kFailoverTag = ":failover=1";
-    return folly::to<std::string>(fullKey, kFailoverTag);
-  }
-
   /**
    * @param destination The destination where the request is to be sent
    */
   DestinationRoute(
       std::shared_ptr<ProxyDestination> destination,
-      std::string poolName,
+      folly::StringPiece poolName,
       size_t indexInPool,
+      int32_t poolStatIdx,
       std::chrono::milliseconds timeout,
       bool keepRoutingPrefix)
       : destination_(std::move(destination)),
-        poolName_(std::move(poolName)),
+        poolName_(poolName),
         indexInPool_(indexInPool),
+        poolStatIndex_(poolStatIdx),
         timeout_(timeout),
         keepRoutingPrefix_(keepRoutingPrefix) {}
 
   template <class Request>
   void traverse(
-      const Request& req,
-      const RouteHandleTraverser<typename RouterInfo::RouteHandleIf>& t) const {
+      const Request&,
+      const RouteHandleTraverser<typename RouterInfo::RouteHandleIf>&) const {
     auto* ctx = fiber_local<RouterInfo>::getTraverseCtx();
     if (ctx) {
+      bool isShadow =
+          fiber_local<RouterInfo>::getRequestClass().is(RequestClass::kShadow);
       ctx->recordDestination(
-          poolName_, indexInPool_, *destination_->accessPoint());
+          PoolContext{poolName_, indexInPool_, isShadow},
+          *destination_->accessPoint());
     }
   }
 
-  template <class Request>
-  ReplyT<Request> route(const Request& req, carbon::DeleteLikeT<Request> = 0)
-      const {
+  memcache::McDeleteReply route(const memcache::McDeleteRequest& req) const {
     auto reply = routeWithDestination(req);
     if (isFailoverErrorResult(reply.result()) && spool(req)) {
       reply = createReply(DefaultReply, req);
@@ -105,19 +99,18 @@ class DestinationRoute {
   }
 
   template <class Request>
-  ReplyT<Request> route(
-      const Request& req,
-      carbon::OtherThanT<Request, carbon::DeleteLike<>> = 0) const {
+  ReplyT<Request> route(const Request& req) const {
     return routeWithDestination(req);
   }
 
  private:
   const std::shared_ptr<ProxyDestination> destination_;
-  const std::string poolName_;
+  const folly::StringPiece poolName_;
   const size_t indexInPool_;
+  const int32_t poolStatIndex_{-1};
   const std::chrono::milliseconds timeout_;
-  const bool keepRoutingPrefix_;
   size_t pendingShadowReqs_{0};
+  const bool keepRoutingPrefix_;
 
   template <class Request>
   ReplyT<Request> routeWithDestination(const Request& req) const {
@@ -137,14 +130,19 @@ class DestinationRoute {
       return constructAndLog(req, *ctx, BusyReply);
     }
 
+    if (poolStatIndex_ >= 0) {
+      ctx->setPoolStatsIndex(poolStatIndex_);
+    }
+    auto requestClass = fiber_local<RouterInfo>::getRequestClass();
     if (ctx->recording()) {
+      bool isShadow = requestClass.is(RequestClass::kShadow);
       ctx->recordDestination(
-          poolName_, indexInPool_, *destination_->accessPoint());
+          PoolContext{poolName_, indexInPool_, isShadow},
+          *destination_->accessPoint());
       return constructAndLog(req, *ctx, DefaultReply, req);
     }
 
     auto proxy = &ctx->proxy();
-    auto requestClass = fiber_local<RouterInfo>::getRequestClass();
     if (requestClass.is(RequestClass::kShadow)) {
       if (proxy->router().opts().target_max_shadow_requests > 0 &&
           pendingShadowReqs_ >=
@@ -182,6 +180,7 @@ class DestinationRoute {
         fiber_local<RouterInfo>::getRequestClass(),
         now,
         now,
+        poolStatIndex_,
         replyContext);
     return reply;
   }
@@ -203,11 +202,7 @@ class DestinationRoute {
       if (!newReq) {
         newReq.emplace(req);
       }
-      auto newKey = keyWithFailoverTag(newReq->key().fullKey());
-      /* It's always safe to not append a failover tag */
-      if (newKey.size() <= MC_KEY_MAX_LEN) {
-        newReq->key() = std::move(newKey);
-      }
+      carbon::detail::setRequestFailover(*newReq);
     }
 
     const auto& reqToSend = newReq ? *newReq : req;
@@ -222,7 +217,10 @@ class DestinationRoute {
         fiber_local<RouterInfo>::getRequestClass(),
         dctx.startTime,
         dctx.endTime,
+        poolStatIndex_,
         replyContext);
+
+    fiber_local<RouterInfo>::setServerLoad(replyContext.serverLoad);
     return reply;
   }
 
@@ -239,11 +237,13 @@ class DestinationRoute {
     auto proxy = &fiber_local<RouterInfo>::getSharedCtx()->proxy();
     auto& ap = *destination_->accessPoint();
     folly::fibers::Baton b;
-    auto res = proxy->router().asyncWriter().run(
-        [&b, &ap, proxy, key, asynclogName]() {
-          proxy->asyncLog().writeDelete(ap, key, asynclogName);
-          b.post();
-        });
+    auto res = false;
+    if (auto asyncWriter = proxy->router().asyncWriter()) {
+      res = asyncWriter->run([&b, &ap, proxy, key, asynclogName]() {
+        proxy->asyncLog().writeDelete(ap, key, asynclogName);
+        b.post();
+      });
+    }
     if (!res) {
       MC_LOG_FAILURE(
           proxy->router().opts(),
@@ -263,14 +263,16 @@ class DestinationRoute {
 template <class RouterInfo>
 std::shared_ptr<typename RouterInfo::RouteHandleIf> makeDestinationRoute(
     std::shared_ptr<ProxyDestination> destination,
-    std::string poolName,
+    folly::StringPiece poolName,
     size_t indexInPool,
+    int32_t poolStatsIndex,
     std::chrono::milliseconds timeout,
     bool keepRoutingPrefix) {
   return makeRouteHandleWithInfo<RouterInfo, DestinationRoute>(
       std::move(destination),
-      std::move(poolName),
+      poolName,
       indexInPool,
+      poolStatsIndex,
       timeout,
       keepRoutingPrefix);
 }

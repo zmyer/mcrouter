@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "ProxyStats.h"
@@ -13,8 +11,12 @@ namespace facebook {
 namespace memcache {
 namespace mcrouter {
 
-ProxyStats::ProxyStats() {
+ProxyStats::ProxyStats(const std::vector<std::string>& statsEnabledPools) {
   init_stats(stats_);
+  poolStats_.reserve(statsEnabledPools.size());
+  for (const auto& curPoolName : statsEnabledPools) {
+    poolStats_.emplace_back(curPoolName);
+  }
 }
 
 void ProxyStats::aggregate(size_t statId) {

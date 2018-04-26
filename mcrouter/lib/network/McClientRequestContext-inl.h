@@ -1,38 +1,15 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2015-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
+#include "mcrouter/lib/Reply.h"
 #include "mcrouter/lib/fbi/cpp/LogFailure.h"
 
 namespace facebook {
 namespace memcache {
-
-namespace {
-#ifndef LIBMC_FBTRACE_DISABLE
-
-template <class Request>
-typename std::enable_if<
-    RequestHasFbTraceInfo<Request>::value,
-    const mc_fbtrace_info_s*>::type inline getFbTraceInfo(const Request&
-                                                              request) {
-  return request.fbtraceInfo();
-}
-
-template <class Request>
-typename std::enable_if<
-    !RequestHasFbTraceInfo<Request>::value,
-    const mc_fbtrace_info_s*>::type inline getFbTraceInfo(const Request&
-                                                              request) {
-  return nullptr;
-}
-
-#endif
-} // anonymous
 
 template <class Reply>
 void McClientRequestContextBase::reply(Reply&& r) {
@@ -49,7 +26,8 @@ void McClientRequestContextBase::reply(Reply&& r) {
         replyType_.name(),
         typeid(Reply).name());
 
-    replyErrorImpl(mc_res_local_error);
+    replyErrorImpl(
+        mc_res_local_error, "Attempt to forward a reply of wrong type.");
     return;
   }
 
@@ -64,7 +42,6 @@ McClientRequestContextBase::McClientRequestContextBase(
     const Request& request,
     uint64_t reqid,
     mc_protocol_t protocol,
-    std::shared_ptr<AsyncMcClientImpl> client,
     folly::Optional<ReplyT<Request>>& replyStorage,
     McClientRequestContextQueue& queue,
     InitializerFuncPtr initializer,
@@ -73,21 +50,18 @@ McClientRequestContextBase::McClientRequestContextBase(
     : reqContext(request, reqid, protocol, supportedCodecs),
       id(reqid),
       queue_(queue),
-      client_(std::move(client)),
       replyType_(typeid(ReplyT<Request>)),
       replyStorage_(reinterpret_cast<void*>(&replyStorage)),
       initializer_(std::move(initializer)),
       onStateChange_(onStateChange) {}
 
 template <class Request>
-void McClientRequestContext<Request>::replyErrorImpl(mc_res_t result) {
+void McClientRequestContext<Request>::replyErrorImpl(
+    mc_res_t result,
+    folly::StringPiece errorMessage) {
   assert(!replyStorage_.hasValue());
-  replyStorage_.emplace(result);
-}
-
-template <class Request>
-const char* McClientRequestContext<Request>::fakeReply() const {
-  return "CLIENT_ERROR unsupported operation\r\n";
+  replyStorage_.assign(
+      createReply<Request>(ErrorReply, result, errorMessage.str()));
 }
 
 template <class Request>
@@ -150,7 +124,6 @@ McClientRequestContext<Request>::McClientRequestContext(
     const Request& request,
     uint64_t reqid,
     mc_protocol_t protocol,
-    std::shared_ptr<AsyncMcClientImpl> client,
     McClientRequestContextQueue& queue,
     McClientRequestContextBase::InitializerFuncPtr func,
     const std::function<void(int pendingDiff, int inflightDiff)>& onStateChange,
@@ -159,7 +132,6 @@ McClientRequestContext<Request>::McClientRequestContext(
           request,
           reqid,
           protocol,
-          std::move(client),
           replyStorage_,
           queue,
           std::move(func),
@@ -190,9 +162,29 @@ void McClientRequestContextQueue::reply(
     auto iter = getContextById(id);
     if (iter != set_.end()) {
       ctx = &(*iter);
-      assert(iter->state() == State::PENDING_REPLY_QUEUE);
-      pendingReplyQueue_.erase(pendingReplyQueue_.iterator_to(*iter));
-      set_.erase(iter);
+      if (iter->state() == State::PENDING_REPLY_QUEUE) {
+        pendingReplyQueue_.erase(pendingReplyQueue_.iterator_to(*iter));
+        set_.erase(iter);
+      } else if (iter->state() == State::WRITE_QUEUE) {
+        // We didn't get write callback yet, so need to properly handle that.
+        set_.erase(iter);
+      } else {
+        LOG_FAILURE(
+            "AsyncMcClient",
+            failure::Category::kOther,
+            "Received reply for a request in an unexpected state {}!",
+            static_cast<uint64_t>(iter->state()));
+        return;
+      }
+
+      auto oldState = ctx->state();
+      ctx->reply(std::move(r));
+      ctx->setReplyStatsContext(replyStatsContext);
+      ctx->setState(State::COMPLETE);
+
+      if (oldState == State::PENDING_REPLY_QUEUE) {
+        ctx->baton_.post();
+      }
     }
   } else {
     // First we're going to receive replies for timed out requests.
@@ -212,18 +204,18 @@ void McClientRequestContextQueue::reply(
           failure::Category::kOther,
           "Received unexpected reply from server!");
     }
-  }
 
-  if (ctx) {
-    ctx->reply(std::move(r));
-    ctx->setReplyStatsContext(replyStatsContext);
-    if (ctx->state() == State::PENDING_REPLY_QUEUE) {
-      ctx->setState(State::COMPLETE);
-      ctx->baton_.post();
-    } else {
-      // Move the request to the replied queue.
-      ctx->setState(State::REPLIED_QUEUE);
-      repliedQueue_.push_back(*ctx);
+    if (ctx) {
+      ctx->reply(std::move(r));
+      ctx->setReplyStatsContext(replyStatsContext);
+      if (ctx->state() == State::PENDING_REPLY_QUEUE) {
+        ctx->setState(State::COMPLETE);
+        ctx->baton_.post();
+      } else {
+        // Move the request to the replied queue.
+        ctx->setState(State::REPLIED_QUEUE);
+        repliedQueue_.push_back(*ctx);
+      }
     }
   }
 }

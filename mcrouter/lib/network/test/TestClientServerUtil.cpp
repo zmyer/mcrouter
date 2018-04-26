@@ -1,41 +1,41 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2015-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "TestClientServerUtil.h"
 
 #include <chrono>
+#include <memory>
 #include <string>
 #include <thread>
 
 #include <glog/logging.h>
 
 #include <folly/Conv.h>
-#include <folly/Memory.h>
 #include <folly/fibers/EventBaseLoopController.h>
 #include <folly/fibers/FiberManager.h>
 #include <folly/io/async/EventBase.h>
+#include <wangle/ssl/TLSTicketKeySeeds.h>
 
 #include "mcrouter/lib/IOBufUtil.h"
 #include "mcrouter/lib/fbi/cpp/util.h"
 #include "mcrouter/lib/network/AsyncMcClient.h"
 #include "mcrouter/lib/network/AsyncMcServer.h"
 #include "mcrouter/lib/network/AsyncMcServerWorker.h"
+#include "mcrouter/lib/network/ReplyStatsContext.h"
 #include "mcrouter/lib/network/ThreadLocalSSLContextProvider.h"
 #include "mcrouter/lib/network/test/ListenSocket.h"
+
+namespace folly {
+class AsyncSocket;
+} // namespace folly
 
 namespace facebook {
 namespace memcache {
 namespace test {
-
-const char* const kPemCaPath = "mcrouter/lib/network/test/ca_cert.pem";
-const char* const kValidKeyPath = "mcrouter/lib/network/test/test_key.pem";
-const char* const kValidCertPath = "mcrouter/lib/network/test/test_cert.pem";
 
 const char* const kBrokenKeyPath = "mcrouter/lib/network/test/broken_key.pem";
 const char* const kBrokenCertPath = "mcrouter/lib/network/test/broken_cert.pem";
@@ -45,27 +45,40 @@ const char* const kInvalidCertPath = "/do/not/exist";
 
 const char* const kServerVersion = "TestServer-1.0";
 
+SSLContextProvider validClientSsl() {
+  return []() {
+    return getSSLContext(
+        getDefaultCertPath(),
+        getDefaultKeyPath(),
+        getDefaultCaPath(),
+        folly::none,
+        true);
+  };
+}
+
 SSLContextProvider validSsl() {
-  return
-      []() { return getSSLContext(kValidCertPath, kValidKeyPath, kPemCaPath); };
+  return []() {
+    return getSSLContext(
+        getDefaultCertPath(), getDefaultKeyPath(), getDefaultCaPath());
+  };
 }
 
 SSLContextProvider invalidSsl() {
   return []() {
-    return getSSLContext(kInvalidCertPath, kInvalidKeyPath, kPemCaPath);
+    return getSSLContext(kInvalidCertPath, kInvalidKeyPath, getDefaultCaPath());
   };
 }
 
 SSLContextProvider brokenSsl() {
   return []() {
-    return getSSLContext(kBrokenCertPath, kBrokenKeyPath, kPemCaPath);
+    return getSSLContext(kBrokenCertPath, kBrokenKeyPath, getDefaultCaPath());
   };
 }
 
 TestServerOnRequest::TestServerOnRequest(
-    std::atomic<bool>& shutdown,
+    folly::fibers::Baton& shutdownLock,
     bool outOfOrder)
-    : shutdown_(shutdown), outOfOrder_(outOfOrder) {}
+    : shutdownLock_(shutdownLock), outOfOrder_(outOfOrder) {}
 
 void TestServerOnRequest::onRequest(
     McServerRequestContext&& ctx,
@@ -77,7 +90,7 @@ void TestServerOnRequest::onRequest(
     std::this_thread::sleep_for(std::chrono::seconds(1));
     processReply(std::move(ctx), Reply(mc_res_notfound));
   } else if (req.key().fullKey() == "shutdown") {
-    shutdown_.store(true);
+    shutdownLock_.post();
     processReply(std::move(ctx), Reply(mc_res_notfound));
     flushQueue();
   } else if (req.key().fullKey() == "busy") {
@@ -90,7 +103,9 @@ void TestServerOnRequest::onRequest(
       size_t valSize = folly::to<size_t>(key);
       value = std::string(valSize, 'a');
     } else if (req.key().fullKey() == "trace_id") {
-      value = folly::to<std::string>(req.traceId());
+      const auto traceMetadata = req.traceToInts();
+      value =
+          folly::sformat("{}:{}", traceMetadata.first, traceMetadata.second);
     } else if (req.key().fullKey() != "empty") {
       value = req.key().fullKey().str();
     }
@@ -133,49 +148,68 @@ void TestServerOnRequest::flushQueue() {
   waitingReplies_.clear();
 }
 
-TestServer::TestServer(
-    bool outOfOrder,
-    bool useSsl,
-    int maxInflight,
-    int timeoutMs,
-    size_t maxConns,
-    bool useDefaultVersion,
-    size_t numThreads)
-    : outOfOrder_(outOfOrder) {
+TestServer::TestServer(Config config)
+    : outOfOrder_(config.outOfOrder),
+      useTicketKeySeeds_(config.useSsl && config.useTicketKeySeeds) {
   opts_.existingSocketFd = sock_.getSocketFd();
-  opts_.numThreads = numThreads;
-  opts_.worker.defaultVersionHandler = useDefaultVersion;
-  opts_.worker.maxInFlight = maxInflight;
-  opts_.worker.sendTimeout = std::chrono::milliseconds{timeoutMs};
-  opts_.setPerThreadMaxConns(maxConns, opts_.numThreads);
-  if (useSsl) {
-    opts_.pemKeyPath = kValidKeyPath;
-    opts_.pemCertPath = kValidCertPath;
-    opts_.pemCaPath = kPemCaPath;
+  opts_.numThreads = config.numThreads;
+  opts_.worker.defaultVersionHandler = config.useDefaultVersion;
+  opts_.worker.maxInFlight = config.maxInflight;
+  opts_.worker.sendTimeout = std::chrono::milliseconds{config.timeoutMs};
+  opts_.worker.goAwayTimeout =
+      std::chrono::milliseconds{config.goAwayTimeoutMs};
+  opts_.setPerThreadMaxConns(config.maxConns, opts_.numThreads);
+  if (config.useSsl) {
+    opts_.pemKeyPath = config.keyPath;
+    opts_.pemCertPath = config.certPath;
+    opts_.pemCaPath = config.caPath;
+    if (config.tfoEnabled) {
+      opts_.tfoEnabledForSsl = true;
+      opts_.tfoQueueSize = 100000;
+    }
   }
 }
 
 void TestServer::run(std::function<void(AsyncMcServerWorker&)> init) {
   LOG(INFO) << "Spawning AsyncMcServer";
 
-  server_ = folly::make_unique<AsyncMcServer>(opts_);
-  server_->spawn(
-      [this, init](size_t, folly::EventBase& evb, AsyncMcServerWorker& worker) {
-        init(worker);
-        worker.setOnConnectionAccepted([this]() { ++acceptedConns_; });
+  folly::fibers::Baton startupLock;
+  serverThread_ = std::thread([this, &startupLock, init] {
+    // take ownership of the socket before starting the server as
+    // its closed in the server
+    sock_.releaseSocketFd();
 
-        while (!shutdown_.load()) {
-          evb.loopOnce(EVLOOP_NONBLOCK);
-        }
+    server_ = std::make_unique<AsyncMcServer>(opts_);
+    if (useTicketKeySeeds_) {
+      wangle::TLSTicketKeySeeds seeds{
+          .oldSeeds = {"aaaa"}, .currentSeeds = {"bbbb"}, .newSeeds = {"cccc"},
+      };
+      server_->setTicketKeySeeds(std::move(seeds));
+    }
+    server_->spawn([this, init](
+        size_t, folly::EventBase& evb, AsyncMcServerWorker& worker) {
+      init(worker);
+      worker.setOnConnectionAccepted([this]() { ++acceptedConns_; });
 
-        LOG(INFO) << "Shutting down AsyncMcServer";
+      evb.loop();
+    });
 
-        worker.shutdown();
-      });
+    // allow server some time to startup
+    /* sleep override */
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
 
-  // allow server some time to startup
-  /* sleep override */
-  std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    startupLock.post();
+
+    shutdownLock_.wait();
+    server_->shutdown();
+    server_->join();
+  });
+  startupLock.wait();
+}
+
+TestServer::~TestServer() {
+  shutdown();
+  join();
 }
 
 std::string TestServer::version() const {
@@ -193,25 +227,37 @@ TestClient::TestClient(
     mc_protocol_t protocol,
     SSLContextProvider ssl,
     uint64_t qosClass,
-    uint64_t qosPath)
-    : fm_(folly::make_unique<folly::fibers::EventBaseLoopController>()) {
+    uint64_t qosPath,
+    std::string serviceIdentity,
+    const CompressionCodecMap* compressionCodecMap,
+    bool enableTfo)
+    : fm_(std::make_unique<folly::fibers::EventBaseLoopController>()) {
   dynamic_cast<folly::fibers::EventBaseLoopController&>(fm_.loopController())
       .attachEventBase(eventBase_);
   ConnectionOptions opts(host, port, protocol);
   opts.writeTimeout = std::chrono::milliseconds(timeoutMs);
+  opts.compressionCodecMap = compressionCodecMap;
   if (ssl) {
     opts.sslContextProvider = std::move(ssl);
     opts.sessionCachingEnabled = true;
+    opts.sslServiceIdentity = serviceIdentity;
+    opts.tfoEnabledForSsl = enableTfo;
   }
   if (qosClass != 0 || qosPath != 0) {
     opts.enableQoS = true;
     opts.qosClass = qosClass;
     opts.qosPath = qosPath;
   }
-  client_ = folly::make_unique<AsyncMcClient>(eventBase_, opts);
+  client_ = std::make_unique<AsyncMcClient>(eventBase_, opts);
   client_->setStatusCallbacks(
-      [] { LOG(INFO) << "Client UP."; },
-      [](bool) { LOG(INFO) << "Client DOWN."; });
+      [](const folly::AsyncSocket&) { LOG(INFO) << "Client UP."; },
+      [](AsyncMcClient::ConnectionDownReason reason) {
+        if (reason == AsyncMcClient::ConnectionDownReason::SERVER_GONE_AWAY) {
+          LOG(INFO) << "Server gone Away.";
+        } else {
+          LOG(INFO) << "Client DOWN.";
+        }
+      });
   client_->setRequestStatusCallbacks(
       [this](int pendingDiff, int inflightDiff) {
         CHECK(pendingDiff != inflightDiff)
@@ -230,32 +276,49 @@ TestClient::TestClient(
 }
 
 void TestClient::setStatusCallbacks(
-    std::function<void()> onUp,
-    std::function<void(bool aborting)> onDown) {
+    std::function<void(const folly::AsyncSocket&)> onUp,
+    std::function<void(AsyncMcClient::ConnectionDownReason)> onDown) {
   client_->setStatusCallbacks(
-      [onUp] {
+      [onUp](const folly::AsyncSocket& socket) {
         LOG(INFO) << "Client UP.";
-        onUp();
+        onUp(socket);
       },
-      [onDown](bool aborting) {
-        LOG(INFO) << "Client DOWN.";
-        onDown(aborting);
+      [onDown](AsyncMcClient::ConnectionDownReason reason) {
+        if (reason == AsyncMcClient::ConnectionDownReason::SERVER_GONE_AWAY) {
+          LOG(INFO) << "Server gone Away.";
+        } else {
+          LOG(INFO) << "Client DOWN.";
+        }
+        onDown(reason);
       });
 }
 
 void TestClient::sendGet(
     std::string key,
     mc_res_t expectedResult,
-    uint32_t timeoutMs) {
+    uint32_t timeoutMs,
+    std::function<void(const ReplyStatsContext&)> replyStatsCallback) {
   inflight_++;
-  fm_.addTask([ key = std::move(key), expectedResult, this, timeoutMs ]() {
+  fm_.addTask([
+    key = std::move(key),
+    expectedResult,
+    replyStatsCallback = std::move(replyStatsCallback),
+    this,
+    timeoutMs
+  ]() {
     McGetRequest req(key);
     if (req.key().fullKey() == "trace_id") {
-      req.setTraceId(12345);
+      req.setTraceId({12345, 67890});
     }
 
     try {
-      auto reply = client_->sendSync(req, std::chrono::milliseconds(timeoutMs));
+      ReplyStatsContext replyStatsContext;
+      auto reply = client_->sendSync(
+          req, std::chrono::milliseconds(timeoutMs), &replyStatsContext);
+      if (replyStatsCallback) {
+        replyStatsCallback(replyStatsContext);
+      }
+
       if (reply.result() == mc_res_found) {
         auto value = carbon::valueRangeSlow(reply);
         if (req.key().fullKey() == "empty") {
@@ -271,9 +334,9 @@ void TestClient::sendGet(
               value.size());
         } else if (req.key().fullKey() == "trace_id") {
           checkLogic(
-              value == "12345",
+              value == "12345:67890",
               "Expected value to equal trace ID {}, got {}",
-              12345,
+              "12345:67890",
               value);
         } else {
           checkLogic(
@@ -285,9 +348,10 @@ void TestClient::sendGet(
       }
       checkLogic(
           expectedResult == reply.result(),
-          "Expected {}, got {}",
+          "Expected {}, got {} for key '{}'",
           mc_res_to_string(expectedResult),
-          mc_res_to_string(reply.result()));
+          mc_res_to_string(reply.result()),
+          req.key().fullKey());
     } catch (const std::exception& e) {
       CHECK(false) << "Failed: " << e.what();
     }
@@ -298,18 +362,25 @@ void TestClient::sendGet(
 void TestClient::sendSet(
     std::string key,
     std::string value,
-    mc_res_t expectedResult) {
+    mc_res_t expectedResult,
+    std::function<void(const ReplyStatsContext&)> replyStatsCallback) {
   inflight_++;
   fm_.addTask([
     key = std::move(key),
     value = std::move(value),
     expectedResult,
+    replyStatsCallback = std::move(replyStatsCallback),
     this
   ]() {
     McSetRequest req(key);
     req.value() = folly::IOBuf::wrapBufferAsValue(folly::StringPiece(value));
 
-    auto reply = client_->sendSync(req, std::chrono::milliseconds(200));
+    ReplyStatsContext replyStatsContext;
+    auto reply = client_->sendSync(
+        req, std::chrono::milliseconds(200), &replyStatsContext);
+    if (replyStatsCallback) {
+      replyStatsCallback(replyStatsContext);
+    }
 
     CHECK(expectedResult == reply.result())
         << "Expected: " << mc_res_to_string(expectedResult) << " got "
@@ -356,6 +427,6 @@ std::string genBigValue() {
   }
   return bigValue;
 }
-}
-}
-} // facebook::memcache::test
+} // test
+} // memcache
+} // facebook

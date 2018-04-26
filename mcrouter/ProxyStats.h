@@ -1,17 +1,18 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
 
 #include <mutex>
 
+#include <folly/experimental/StringKeyedUnorderedMap.h>
+
 #include "mcrouter/ExponentialSmoothData.h"
+#include "mcrouter/PoolStats.h"
 #include "mcrouter/stats.h"
 
 namespace facebook {
@@ -20,7 +21,7 @@ namespace mcrouter {
 
 class ProxyStats {
  public:
-  ProxyStats();
+  explicit ProxyStats(const std::vector<std::string>& statsEnabledPools);
 
   /**
    * Aggregate proxy stat with the given index.
@@ -131,9 +132,36 @@ class ProxyStats {
     return stats_[statId];
   }
 
+  folly::StringKeyedUnorderedMap<stat_t> getAggregatedPoolStatsMap() const {
+    folly::StringKeyedUnorderedMap<stat_t> poolStatsMap;
+    for (const auto& poolStats : poolStats_) {
+      for (const auto& stat : poolStats.getStats()) {
+        poolStatsMap.emplace(stat.name, stat);
+      }
+    }
+    return poolStatsMap;
+  }
+
+  /**
+   * Returns pointer to the entry corresponding to the idx in
+   * the poolStats vector. If the idx is invalid, nullptr is returned
+   *
+   * @param  idx
+   * @return pointer to poolStats vector entry
+   *         nullptr if idx is invalid
+   */
+  PoolStats* getPoolStats(int32_t idx) {
+    if (idx < 0 || static_cast<size_t>(idx) >= poolStats_.size()) {
+      return nullptr;
+    }
+    return &poolStats_[idx];
+  }
+
  private:
   mutable std::mutex mutex_;
   stat_t stats_[num_stats]{};
+  // vector of the PoolStats
+  std::vector<PoolStats> poolStats_;
 
   ExponentialSmoothData<64> durationUs_;
 

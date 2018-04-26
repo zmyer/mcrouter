@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -13,7 +11,6 @@
 #include <string>
 #include <vector>
 
-#include <folly/Memory.h>
 #include <folly/fibers/FiberManager.h>
 #include <folly/fibers/SimpleLoopController.h>
 #include <folly/fibers/WhenN.h>
@@ -24,7 +21,9 @@
 #include "mcrouter/lib/RouteHandleTraverser.h"
 #include "mcrouter/lib/carbon/RoutingGroups.h"
 #include "mcrouter/lib/config/RouteHandleBuilder.h"
+#include "mcrouter/lib/config/RouteHandleProviderIf.h"
 #include "mcrouter/lib/network/gen/Memcache.h"
+#include "mcrouter/lib/routes/NullRoute.h"
 
 namespace facebook {
 namespace memcache {
@@ -48,9 +47,43 @@ typename std::enable_if<Reply::hasValue, void>::type setReplyValue(
 }
 template <class Reply>
 typename std::enable_if<!Reply::hasValue, void>::type setReplyValue(
-    Reply& reply,
-    const std::string& val) {}
+    Reply&,
+    const std::string& /* val */) {}
 } // detail
+
+/**
+ * Very basic route handle provider to be used in unit tests only.
+ */
+template <class RouteHandleIf>
+class SimpleRouteHandleProvider : public RouteHandleProviderIf<RouteHandleIf> {
+ public:
+  std::vector<std::shared_ptr<RouteHandleIf>> create(
+      RouteHandleFactory<RouteHandleIf>& /* factory */,
+      folly::StringPiece type,
+      const folly::dynamic& json) override {
+    std::vector<std::shared_ptr<RouteHandleIf>> result;
+
+    const folly::dynamic* jsonPtr = nullptr;
+    if (type == "Pool") {
+      jsonPtr = json.get_ptr("servers");
+    } else {
+      jsonPtr = &json;
+    }
+
+    if (jsonPtr->isArray()) {
+      for (const auto& child : *jsonPtr) {
+        result.push_back(mcrouter::createNullRoute<RouteHandleIf>());
+      }
+    } else {
+      result.push_back(mcrouter::createNullRoute<RouteHandleIf>());
+    }
+    return result;
+  }
+
+  const folly::dynamic& parsePool(const folly::dynamic& json) override {
+    return json;
+  }
+};
 
 struct GetRouteTestData {
   mc_res_t result_;
@@ -95,6 +128,8 @@ struct TestHandleImpl {
   std::vector<uint32_t> sawExptimes;
 
   std::vector<std::string> sawOperations;
+
+  std::vector<int64_t> sawLeaseTokensSet;
 
   bool isTko;
 
@@ -179,9 +214,8 @@ struct RecordingRoute {
   }
 
   template <class Request>
-  void traverse(
-      const Request& req,
-      const RouteHandleTraverser<RouteHandleIf>& t) const {}
+  void traverse(const Request&, const RouteHandleTraverser<RouteHandleIf>&)
+      const {}
 
   GetRouteTestData dataGet_;
   UpdateRouteTestData dataUpdate_;
@@ -196,7 +230,19 @@ struct RecordingRoute {
       : dataGet_(g_td), dataUpdate_(u_td), dataDelete_(d_td), h_(h) {}
 
   template <class Request>
-  ReplyT<Request> route(const Request& req) {
+  ReplyT<Request> route(
+      const Request& req,
+      carbon::OtherThanT<Request, McLeaseSetRequest> = 0) {
+    return routeInternal(req);
+  }
+
+  McLeaseSetReply route(const McLeaseSetRequest& req) {
+    h_->sawLeaseTokensSet.push_back(req.leaseToken());
+    return routeInternal(req);
+  }
+
+  template <class Request>
+  ReplyT<Request> routeInternal(const Request& req) {
     ReplyT<Request> reply;
 
     if (h_->isTko) {
@@ -247,11 +293,11 @@ inline std::vector<std::shared_ptr<RouteHandleIf>> get_route_handles(
 class TestFiberManager {
  public:
   TestFiberManager()
-      : fm_(folly::make_unique<folly::fibers::SimpleLoopController>()) {}
+      : fm_(std::make_unique<folly::fibers::SimpleLoopController>()) {}
 
   template <class LocalType>
   explicit TestFiberManager(LocalType t)
-      : fm_(t, folly::make_unique<folly::fibers::SimpleLoopController>()) {}
+      : fm_(t, std::make_unique<folly::fibers::SimpleLoopController>()) {}
 
   void run(std::function<void()>&& fun) {
     runAll({std::move(fun)});
@@ -287,5 +333,6 @@ std::string replyFor(Rh& rh, const std::string& key) {
   auto reply = rh.route(McGetRequest(key));
   return carbon::valueRangeSlow(reply).str();
 }
-}
-} // facebook::memcache
+
+} // memcache
+} // facebook

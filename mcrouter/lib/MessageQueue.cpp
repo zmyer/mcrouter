@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2015-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "MessageQueue.h"
@@ -15,10 +13,12 @@ namespace memcache {
 Notifier::Notifier(
     size_t noNotifyRate,
     int64_t waitThreshold,
-    NowUsecFunc nowFunc) noexcept
+    NowUsecFunc nowFunc,
+    std::function<bool(bool)> postDrainCallback) noexcept
     : noNotifyRate_(noNotifyRate),
       waitThreshold_(waitThreshold),
       nowFunc_(nowFunc),
+      postDrainCallback_(std::move(postDrainCallback)),
       lastTimeUsec_(nowFunc_()),
       state_(State::EMPTY) {}
 
@@ -59,5 +59,6 @@ void Notifier::maybeUpdatePeriod() noexcept {
     curMessages_ = 0;
   }
 }
-}
-} // facebook::memcache
+
+} // memcache
+} // facebook

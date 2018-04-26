@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -23,6 +21,7 @@
 #include "mcrouter/CarbonRouterClient.h"
 #include "mcrouter/CarbonRouterInstanceBase.h"
 #include "mcrouter/ConfigApi.h"
+#include "mcrouter/FileObserver.h"
 #include "mcrouter/Proxy.h"
 #include "mcrouter/ProxyConfigBuilder.h"
 
@@ -32,7 +31,6 @@ namespace mcrouter {
 
 class McrouterManager;
 
-template <class RouterInfo>
 class ProxyThread;
 
 /**
@@ -50,7 +48,9 @@ class CarbonRouterInstance
   /**
    * @return  If an instance with the given persistence_id already exists,
    *   returns a pointer to it. Options are ignored in this case.
-   *   Otherwise spins up a new instance and returns the pointer to it.
+   *   Otherwise spins up a new instance and returns the pointer to it. May
+   *   return nullptr if the McRouterManager singleton is unavailable, perhaps
+   *   due to misconfiguration.
    * @param evbs  Must be either empty or contain options.num_proxies
    *   event bases.  If empty, mcrouter will spawn its own proxy threads.
    *   Otherwise, proxies will run on the provided event bases
@@ -127,13 +127,6 @@ class CarbonRouterInstance
    */
   Proxy<RouterInfo>* getProxy(size_t index) const;
 
-  /**
-   * Release ownership of a proxy
-   */
-  typename Proxy<RouterInfo>::Pointer releaseProxy(size_t index);
-
-  bool configure(const ProxyConfigBuilder& builder);
-
   CarbonRouterInstance(const CarbonRouterInstance&) = delete;
   CarbonRouterInstance& operator=(const CarbonRouterInstance&) = delete;
   CarbonRouterInstance(CarbonRouterInstance&&) noexcept = delete;
@@ -144,12 +137,6 @@ class CarbonRouterInstance
 
   // Lock to get before regenerating config structure
   std::mutex configReconfigLock_;
-
-  // Stat updater thread updates rate stat windows for each proxy
-  std::thread statUpdaterThread_;
-
-  std::mutex statUpdaterCvMutex_;
-  std::condition_variable statUpdaterCv_;
 
   // Corresponding handle
   ObservableRuntimeVars::CallbackHandle rxmitHandle_;
@@ -162,20 +149,22 @@ class CarbonRouterInstance
 
   std::atomic<bool> shutdownStarted_{false};
 
+  FileObserverHandle runtimeVarsObserverHandle_;
+
   ConfigApi::CallbackHandle configUpdateHandle_;
 
   /**
-   * Exactly one of these vectors will contain opts.num_proxies elements,
-   * others will be empty.
-   *
-   * Standalone/sync mode: we don't startup proxy threads, so Mcrouter
-   * owns the proxies directly.
-   *
-   * Embedded mode: Mcrouter owns ProxyThreads, which managed the lifetime
-   * of proxies on their own threads.
+   * Both these vectors will contain opts.num_proxies elements.
    */
-  std::vector<typename Proxy<RouterInfo>::Pointer> proxies_;
-  std::vector<std::unique_ptr<ProxyThread<RouterInfo>>> proxyThreads_;
+  std::vector<Proxy<RouterInfo>*> proxies_;
+  std::vector<std::unique_ptr<folly::VirtualEventBase>> proxyEvbs_;
+
+  /**
+   * This will contain opts.num_proxies elements in Embedded mode (mcrouter
+   * owns proxy threads).
+   * In case of Standalone/sync mode, this vector is empty.
+   */
+  std::vector<std::unique_ptr<ProxyThread>> proxyThreads_;
 
   /**
    * The only reason this is a separate function is due to legacy accessor
@@ -189,10 +178,8 @@ class CarbonRouterInstance
 
   ~CarbonRouterInstance() override;
 
-  bool spinUp(const std::vector<folly::EventBase*>& evbs);
-
-  void startAwriterThreads();
-  void stopAwriterThreads() noexcept;
+  folly::Expected<folly::Unit, std::string> spinUp(
+      const std::vector<folly::EventBase*>& evbs);
 
   void spawnAuxiliaryThreads();
   void joinAuxiliaryThreads() noexcept;
@@ -200,17 +187,18 @@ class CarbonRouterInstance
 
   void subscribeToConfigUpdate();
 
-  void statUpdaterThreadRun();
   void spawnStatLoggerThread();
   void startObservingRuntimeVarsFile();
 
+  folly::Expected<folly::Unit, std::string> configure(
+      const ProxyConfigBuilder& builder);
   /** (re)configure the router. true on success, false on error.
       NB file-based configuration is synchronous
       but server-based configuration is asynchronous */
   bool reconfigure(const ProxyConfigBuilder& builder);
   /** Create the ProxyConfigBuilder used to reconfigure.
-  Returns folly::none if constructor fails. **/
-  folly::Optional<ProxyConfigBuilder> createConfigBuilder();
+  Returns error reason if constructor fails. **/
+  folly::Expected<ProxyConfigBuilder, std::string> createConfigBuilder();
 
   void registerOnUpdateCallbackForRxmits();
 

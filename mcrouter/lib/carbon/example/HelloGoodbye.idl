@@ -7,7 +7,8 @@ request HelloRequest {
   name: "hello";
   reply: HelloReply;
 
-  1: Keys<IOBuf> key;
+  1: carbon::Keys<folly::IOBuf> key;
+  2: uint64_t shardId;
 };
 
 reply HelloReply {
@@ -19,16 +20,18 @@ request GoodbyeRequest {
   name: "goodbye";
   reply: GoodbyeReply;
 
-  1: Keys<IOBuf> key;
+  1: carbon::Keys<folly::IOBuf> key;
+  2: uint64_t shardId;
 };
 
 reply GoodbyeReply {
   1: Result result;
-  2: string message;
+  2: std::string message;
 };
 
 service {
   additional_route_handles: [
     DuplicateRoute @ "mcrouter/lib/carbon/example/DuplicateRoute.h"
   ];
+  gen_client_tool: true;
 };

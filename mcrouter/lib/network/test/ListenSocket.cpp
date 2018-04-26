@@ -1,17 +1,17 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2015-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "ListenSocket.h"
 
 #include <arpa/inet.h>
+#include <fcntl.h>
 #include <netdb.h>
 #include <sys/socket.h>
+#include <unistd.h>
 
 #include <folly/Conv.h>
 #include <folly/ScopeGuard.h>
@@ -77,6 +77,28 @@ ListenSocket::ListenSocket() {
   }
 
   VLOG(1) << "Listening on " << socketFd_ << ", port " << port_;
+}
+
+void ListenSocket::setCloseOnExec(bool value) {
+  if (socketFd_ < 0) {
+    return;
+  }
+
+  // Read the current flags
+  int old_flags = ::fcntl(socketFd_, F_GETFD, 0);
+  if (old_flags < 0) {
+    return;
+  }
+
+  // Set just the flag we want to set
+  int new_flags;
+  if (value) {
+    new_flags = old_flags | FD_CLOEXEC;
+  } else {
+    new_flags = old_flags & ~FD_CLOEXEC;
+  }
+
+  ::fcntl(socketFd_, F_SETFD, new_flags);
 }
 
 ListenSocket::ListenSocket(ListenSocket&& other) noexcept

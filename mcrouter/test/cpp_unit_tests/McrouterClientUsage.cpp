@@ -1,19 +1,17 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
+#include <memory>
 #include <thread>
 #include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
 
-#include <folly/Memory.h>
 #include <folly/fibers/Baton.h>
 #include <folly/io/async/EventBase.h>
 
@@ -24,10 +22,12 @@
 
 using facebook::memcache::McGetReply;
 using facebook::memcache::McGetRequest;
+using facebook::memcache::McStatsReply;
+using facebook::memcache::McStatsRequest;
 using facebook::memcache::MemcacheRouterInfo;
-using facebook::memcache::mcrouter::defaultTestOptions;
 using facebook::memcache::mcrouter::CarbonRouterClient;
 using facebook::memcache::mcrouter::CarbonRouterInstance;
+using facebook::memcache::mcrouter::defaultTestOptions;
 
 /**
  * This test provides an example of how to use the CarbonRouterClient API.
@@ -59,7 +59,7 @@ TEST(CarbonRouterClient, basicUsageSameThreadClient) {
   std::vector<folly::EventBase*> evbs;
   std::vector<std::thread> threads;
   for (size_t i = 0; i < opts.num_proxies; ++i) {
-    auto evb = folly::make_unique<folly::EventBase>();
+    auto evb = std::make_unique<folly::EventBase>();
     evbs.push_back(evb.get());
     threads.emplace_back([evb = std::move(evb)]() { evb->loopForever(); });
   }
@@ -92,7 +92,7 @@ TEST(CarbonRouterClient, basicUsageSameThreadClient) {
     // We must ensure that req will remain alive all the way through the reply
     // callback given to client->send(). This demonstrates one way of ensuring
     // this.
-    auto req = folly::make_unique<McGetRequest>("key");
+    auto req = std::make_unique<McGetRequest>("key");
     auto reqRawPtr = req.get();
     client->send(
         *reqRawPtr,
@@ -141,6 +141,43 @@ TEST(CarbonRouterClient, basicUsageRemoteThreadClient) {
   client->send(
       req, [&baton, &replyReceived](const McGetRequest&, McGetReply&& reply) {
         EXPECT_EQ(mc_res_notfound, reply.result());
+        replyReceived = true;
+        baton.post();
+      });
+
+  // Ensure proxies have a chance to send all outstanding requests. Note the
+  // extra synchronization required when using a remote-thread client.
+  baton.wait();
+  router->shutdown();
+  EXPECT_TRUE(replyReceived);
+}
+
+TEST(CarbonRouterClient, remoteThreadStatsRequestUsage) {
+  // This test is a lot like the previous one, except this test demonstrates
+  // how to collect libmcrouter stats using the McStatsRequest.
+  auto opts = defaultTestOptions();
+  opts.config_str = R"({ "route": "NullRoute" })";
+
+  auto router = CarbonRouterInstance<MemcacheRouterInfo>::init(
+      "remoteThreadClientTest", opts);
+
+  // Create client that can safely send requests through a Proxy on another
+  // thread
+  auto client = router->createClient(0 /* max_outstanding_requests */);
+
+  // Note, as in the previous test, that req is kept alive through the end of
+  // the callback provided to client->send() below.
+  // Also note that we are careful not to modify req while the proxy (in this
+  // case, on another thread) may be processing it.
+  const McStatsRequest req("all");
+  bool replyReceived = false;
+  folly::fibers::Baton baton;
+
+  client->send(
+      req,
+      [&baton, &replyReceived](const McStatsRequest&, McStatsReply&& reply) {
+        EXPECT_GT(reply.stats().size(), 1);
+        EXPECT_EQ(mc_res_ok, reply.result());
         replyReceived = true;
         baton.post();
       });

@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2015, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 // @nolint
@@ -226,6 +224,15 @@ MCROUTER_OPTION_INTEGER(
     "set TCP KEEPALIVE idle parameter in seconds")
 
 MCROUTER_OPTION_INTEGER(
+    int,
+    max_no_flush_event_loops,
+    5,
+    "max-no-flush-event-loops",
+    no_short,
+    "Maximum number of non-blocking event loops before we flush batched "
+    "requests")
+
+MCROUTER_OPTION_INTEGER(
     unsigned int,
     reset_inactive_connection_interval,
     60000,
@@ -272,13 +279,6 @@ MCROUTER_OPTION_INTEGER(
     " per target per thread.  Requests that would exceed this limit are dropped"
     " immediately.")
 
-MCROUTER_OPTION_TOGGLE(
-    no_network,
-    false,
-    "no-network",
-    no_short,
-    "Debug only. Return random generated replies, do not use network.")
-
 MCROUTER_OPTION_INTEGER(
     size_t,
     proxy_max_inflight_requests,
@@ -303,24 +303,31 @@ MCROUTER_OPTION_INTEGER(
 
 MCROUTER_OPTION_STRING(
     pem_cert_path,
-    "",
+    facebook::memcache::mcrouter::getDefaultPemCertPath(),
     "pem-cert-path",
     no_short,
     "Path of pem-style certificate for ssl")
 
 MCROUTER_OPTION_STRING(
     pem_key_path,
-    "",
+    facebook::memcache::mcrouter::getDefaultPemCertKey(),
     "pem-key-path",
     no_short,
     "Path of pem-style key for ssl")
 
 MCROUTER_OPTION_STRING(
     pem_ca_path,
-    "",
+    MCROUTER_DEFAULT_CA_PATH,
     "pem-ca-path",
     no_short,
     "Path of pem-style CA cert for ssl")
+
+MCROUTER_OPTION_STRING(
+    ssl_service_identity,
+    "",
+    "ssl-service-identity",
+    no_short,
+    "The service identity of the destination service when SSL is used")
 
 MCROUTER_OPTION_TOGGLE(
     enable_qos,
@@ -393,12 +400,36 @@ MCROUTER_OPTION_STRING(
     " this option supersedes the deprecated config-file and config-str options.")
 
 MCROUTER_OPTION_STRING(
+    config_dump_root,
+    CONFIG_DUMP_ROOT_DEFAULT,
+    "config-dump-root",
+    no_short,
+    "Directory where the last valid config will be saved. "
+    "Empty string to disable.")
+
+MCROUTER_OPTION_INTEGER(
+    int,
+    max_dumped_config_age,
+    1 * 60 * 60 /* 1 hour */,
+    "max-dumped-config-age",
+    no_short,
+    "Max age of backup config files that mcrouter is allowed to use"
+    " (in seconds). 0 to disable using dumped configs.")
+
+MCROUTER_OPTION_STRING(
     config_file,
     "",
     "config-file",
     'f',
     "DEPRECATED. Load configuration from file. This option has no effect if"
     " --config option is used.")
+
+MCROUTER_OPTION_STRING(
+    pool_stats_config_file,
+    "",
+    "pool-stats-config-file",
+    no_short,
+    "File containing stats enabled pool names.")
 
 MCROUTER_OPTION_STRING(
     config_str,
@@ -453,6 +484,14 @@ MCROUTER_OPTION_INTEGER(
     "reconfiguration-delay-ms",
     no_short,
     "Delay between config files change and mcrouter reconfiguration.")
+
+MCROUTER_OPTION_INTEGER(
+    int,
+    post_reconfiguration_delay_ms,
+    0,
+    "post-reconfiguration-delay-ms",
+    no_short,
+    "Delay after a reconfiguration is complete.")
 
 MCROUTER_OPTION_STRING_MAP(
     config_params,
@@ -675,6 +714,30 @@ MCROUTER_OPTION_INTEGER(
     no_long,
     no_short,
     "If non-zero use this port while logging to async log")
+
+MCROUTER_OPTION_TOGGLE(
+    enable_send_to_main_shard_split,
+    true,
+    "disable-send-to-main-shard-split",
+    no_short,
+    "DEPRECATED. No longer supported/needed")
+
+MCROUTER_OPTION_INTEGER(
+    size_t,
+    max_shadow_token_map_size,
+    1024,
+    "max-shadow-token-map-size",
+    no_short,
+    "Maximum size of LRU cache mapping normal lease tokens to shadow lease"
+    " tokens. High rates of shadowing of lease operations may require a limit"
+    " higher than the default. 0 disables limiting of map size.")
+
+MCROUTER_OPTION_TOGGLE(
+    enable_ssl_tfo,
+    false,
+    "enable-ssl-tfo",
+    no_short,
+    "enable TFO when connecting/accepting via SSL")
 
 #ifdef ADDITIONAL_OPTIONS_FILE
 #include ADDITIONAL_OPTIONS_FILE

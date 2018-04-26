@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -49,6 +47,19 @@ class UniqueIntrusiveList {
   }
 
   /**
+   * Transfers ownership of t to this list by prepending it to the front.
+   *
+   * @param t  Must not be nullptr.
+   * @return   Reference to *t for convenience.  For example,
+   *           auto& t = list.pushFront(make_unique<T>());
+   */
+  T& pushFront(std::unique_ptr<T, TDeleter> t) {
+    assert(t);
+    list_.push_front(*t.release());
+    return list_.front();
+  }
+
+  /**
    * Transfers ownership of t into this list, and appends it at the end.
    *
    * @param t  Must not be nullptr.
@@ -57,8 +68,7 @@ class UniqueIntrusiveList {
    */
   T& pushBack(std::unique_ptr<T, TDeleter> t) {
     assert(t);
-    list_.push_back(*t);
-    t.release();
+    list_.push_back(*t.release());
     return list_.back();
   }
 
@@ -69,6 +79,16 @@ class UniqueIntrusiveList {
     assert(!list_.empty());
     std::unique_ptr<T, TDeleter> t(&list_.front(), TDeleter());
     list_.pop_front();
+    return t;
+  }
+
+  /**
+   * Transfers ownership of the back element out of the list.
+   */
+  std::unique_ptr<T, TDeleter> popBack() {
+    assert(!list_.empty());
+    std::unique_ptr<T, TDeleter> t(&list_.back(), TDeleter());
+    list_.pop_back();
     return t;
   }
 

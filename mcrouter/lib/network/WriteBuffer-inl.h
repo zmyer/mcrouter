@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2015-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -45,7 +43,7 @@ WriteBuffer::prepareTyped(
       return asciiReply_.prepare(
           std::move(reply), ctx_->asciiKey(), iovsBegin_, iovsCount_);
 
-    case mc_umbrella_protocol:
+    case mc_umbrella_protocol_DONOTUSE:
       return umbrellaReply_.prepare(
           std::move(reply), ctx_->reqid_, iovsBegin_, iovsCount_);
 
@@ -56,6 +54,7 @@ WriteBuffer::prepareTyped(
           codecIdRange,
           compressionCodecMap,
           ctx_->getDropProbability(),
+          ctx_->getServerLoad(),
           iovsBegin_,
           iovsCount_);
 
@@ -86,20 +85,16 @@ WriteBuffer::prepareTyped(
 
   typeId_ = static_cast<uint32_t>(Reply::typeId);
 
-  // The current congestion control only supports mc_caret_protocol.
-  // May extend to other protocals in the future.
-  const auto dropProbability = ctx_->session().getCpuController()
-      ? ctx_->session().getCpuController()->getDropProbability()
-      : 0.0;
-
   return caretReply_.prepare(
       std::move(reply),
       ctx_->reqid_,
       codecIdRange,
       compressionCodecMap,
-      dropProbability,
+      ctx_->getDropProbability(),
+      ctx_->getServerLoad(),
       iovsBegin_,
       iovsCount_);
 }
-}
-} // facebook::memcache
+
+} // memcache
+} // facebook

@@ -1,17 +1,17 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "AsyncMcServerWorker.h"
 
-#include <folly/Memory.h>
+#include <memory>
+
 #include <folly/io/async/AsyncSSLSocket.h>
 #include <folly/io/async/AsyncSocket.h>
+#include <folly/io/async/AsyncTransport.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/io/async/SSLContext.h>
 
@@ -41,27 +41,36 @@ bool AsyncMcServerWorker::addClientSocket(int fd, void* userCtxt) {
 }
 
 bool AsyncMcServerWorker::addClientSocket(
-    folly::AsyncSocket::UniquePtr&& socket,
+    folly::AsyncSocket::UniquePtr socket,
+    void* userCtxt) {
+  socket->setMaxReadsPerEvent(opts_.maxReadsPerEvent);
+  socket->setNoDelay(true);
+  return addClientTransport(std::move(socket), userCtxt);
+}
+
+McServerSession* AsyncMcServerWorker::addClientTransport(
+    folly::AsyncTransportWrapper::UniquePtr transport,
     void* userCtxt) {
   if (!onRequest_) {
-    throw std::logic_error("can't add a socket without onRequest callback");
+    throw std::logic_error("can't add a transport without onRequest callback");
   }
 
   if (onAccepted_) {
     onAccepted_();
   }
 
-  socket->setSendTimeout(opts_.sendTimeout.count());
-  socket->setMaxReadsPerEvent(opts_.maxReadsPerEvent);
-  socket->setNoDelay(true);
+  transport->setSendTimeout(opts_.sendTimeout.count());
 
   try {
-    tracker_.add(
-        std::move(socket), onRequest_, opts_, userCtxt, compressionCodecMap_);
-    return true;
+    return std::addressof(tracker_.add(
+        std::move(transport),
+        onRequest_,
+        opts_,
+        userCtxt,
+        compressionCodecMap_));
   } catch (const std::exception& ex) {
     // TODO: record stats about failure
-    return false;
+    return nullptr;
   }
 }
 
@@ -77,5 +86,6 @@ void AsyncMcServerWorker::shutdown() {
 bool AsyncMcServerWorker::writesPending() const {
   return tracker_.writesPending();
 }
-}
-} // facebook::memcache
+
+} // memcache
+} // facebook

@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2015-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include <chrono>
@@ -43,8 +41,9 @@ void assertQueryFalse(
 } // anonymous namespace
 
 TEST(LeaseTokenMap, sanity) {
-  folly::EventBaseThread evbAuxThread;
-  LeaseTokenMap map(evbAuxThread);
+  auto scheduler = std::make_shared<folly::FunctionScheduler>();
+  scheduler->start();
+  LeaseTokenMap map(scheduler);
 
   EXPECT_EQ(map.size(), 0);
 
@@ -69,8 +68,9 @@ TEST(LeaseTokenMap, magicConflict) {
   // by memcached) that contains our "magic", LeaseTokenMap should handle it
   // gracefully.
 
-  folly::EventBaseThread evbAuxThread;
-  LeaseTokenMap map(evbAuxThread);
+  auto scheduler = std::make_shared<folly::FunctionScheduler>();
+  scheduler->start();
+  LeaseTokenMap map(scheduler);
 
   EXPECT_EQ(map.size(), 0);
 
@@ -87,8 +87,9 @@ TEST(LeaseTokenMap, nestedRoutes) {
   // Simulates the following routing:
   // proxyRoute -> failover:route02 -> failover:route01 -> destinationRoute
 
-  folly::EventBaseThread evbAuxThread;
-  LeaseTokenMap map(evbAuxThread);
+  auto scheduler = std::make_shared<folly::FunctionScheduler>();
+  scheduler->start();
+  LeaseTokenMap map(scheduler);
 
   // LEASE-GET
   // get token 17 from memcached
@@ -108,9 +109,11 @@ TEST(LeaseTokenMap, nestedRoutes) {
 }
 
 TEST(LeaseTokenMap, shrink) {
-  size_t tokenTtl = 100;
-  folly::EventBaseThread evbAuxThread;
-  LeaseTokenMap map(evbAuxThread, tokenTtl);
+  std::chrono::milliseconds tokenTtl(100);
+  std::chrono::milliseconds cleanupInterval(250);
+  auto scheduler = std::make_shared<folly::FunctionScheduler>();
+  scheduler->start();
+  LeaseTokenMap map(scheduler, tokenTtl, cleanupInterval);
 
   EXPECT_EQ(map.size(), 0);
 
@@ -120,15 +123,16 @@ TEST(LeaseTokenMap, shrink) {
 
   // Allow time for the map to shrink.
   /* sleep override */
-  std::this_thread::sleep_for(std::chrono::milliseconds(tokenTtl * 5));
+  std::this_thread::sleep_for(cleanupInterval * 2);
 
   EXPECT_EQ(map.size(), 0);
 }
 
 TEST(LeaseTokenMap, stress) {
-  size_t tokenTtl = 1000;
-  folly::EventBaseThread evbAuxThread;
-  LeaseTokenMap map(evbAuxThread, tokenTtl);
+  std::chrono::milliseconds tokenTtl(1000);
+  auto scheduler = std::make_shared<folly::FunctionScheduler>();
+  scheduler->start();
+  LeaseTokenMap map(scheduler, tokenTtl);
 
   EXPECT_EQ(map.size(), 0);
 

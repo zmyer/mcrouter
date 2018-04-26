@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -64,6 +62,15 @@ class RouteHandleFactory {
    */
   std::vector<RouteHandlePtr> createList(const folly::dynamic& json);
 
+  /**
+   * Loads a pool from ConfigApi, expand `inherit`, etc.
+   *
+   * @param json  Json with the pool information.
+   *
+   * @return      The folly::dynamic object with pool name and final json blob.
+   */
+  const folly::dynamic& parsePool(const folly::dynamic& json);
+
   size_t getThreadId() const noexcept {
     return threadId_;
   }
@@ -82,7 +89,8 @@ class RouteHandleFactory {
       folly::StringPiece name,
       const folly::dynamic& json);
 };
-}
-} // facebook::memcache
+
+} // namespace memcache
+} // namespace facebook
 
 #include "RouteHandleFactory-inl.h"

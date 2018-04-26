@@ -1,12 +1,12 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2017-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
+#include <type_traits>
+
 namespace carbon {
 
 template <class T>
@@ -42,6 +42,31 @@ struct ListDedup<
     List<X, Xs...>,
     typename std::enable_if<ListContains<List<Xs...>, X>::value>::type> {
   using type = typename ListDedup<List<Xs...>>::type;
+};
+
+template <class First>
+struct FindByPairFirst<First, List<>> {
+  using type = void;
+};
+
+template <class First, class P1, class... Ps>
+struct FindByPairFirst<First, List<P1, Ps...>> {
+  using type = typename std::conditional<
+      std::is_same<First, typename P1::First>::value,
+      typename P1::Second,
+      typename FindByPairFirst<First, List<Ps...>>::type>::type;
+};
+
+template <int K>
+struct FindByKey<K, List<>> {
+  using type = void;
+};
+template <int K, class KV1, class... KVs>
+struct FindByKey<K, List<KV1, KVs...>> {
+  using type = typename std::conditional<
+      K == KV1::Key,
+      typename KV1::Value,
+      typename FindByKey<K, List<KVs...>>::type>::type;
 };
 
 } // carbon

@@ -1,15 +1,15 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "ConnectionFifo.h"
 
 #include <chrono>
+
+#include <folly/Range.h>
 
 namespace facebook {
 namespace memcache {
@@ -108,7 +108,9 @@ class IovecIterator {
   size_t curBufLen_{0};
 };
 
-MessageHeader buildMsgHeader(const folly::AsyncTransportWrapper* transport) {
+MessageHeader buildMsgHeader(
+    const folly::AsyncTransportWrapper* transport,
+    folly::StringPiece routerName) {
   MessageHeader header;
   header.setConnectionId(reinterpret_cast<uintptr_t>(transport));
 
@@ -141,6 +143,20 @@ MessageHeader buildMsgHeader(const folly::AsyncTransportWrapper* transport) {
     VLOG(2) << "Error getting host/port to write to debug fifo: " << e.what();
   }
 
+  // set router name
+  header.routerNameModifiable()[0] = '\0';
+  if (!routerName.empty()) {
+    int res = std::snprintf(
+        header.routerNameModifiable(),
+        MessageHeader::kRouterNameMaxSize,
+        "%s",
+        routerName.str().c_str());
+    if (res < 0) {
+      LOG(ERROR) << "Error writing router name '" << routerName
+                 << "' to debug fifo";
+    }
+  }
+
   return header;
 }
 
@@ -150,9 +166,10 @@ ConnectionFifo::ConnectionFifo() noexcept {}
 
 ConnectionFifo::ConnectionFifo(
     std::shared_ptr<Fifo> debugFifo,
-    const folly::AsyncTransportWrapper* transport) noexcept
+    const folly::AsyncTransportWrapper* transport,
+    folly::StringPiece routerName) noexcept
     : debugFifo_(std::move(debugFifo)),
-      currentMessageHeader_(buildMsgHeader(transport)) {}
+      currentMessageHeader_(buildMsgHeader(transport, routerName)) {}
 
 bool ConnectionFifo::isConnected() const noexcept {
   return debugFifo_ && debugFifo_->isConnected();

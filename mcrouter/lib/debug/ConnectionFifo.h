@@ -1,14 +1,13 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
 
+#include <folly/Range.h>
 #include <folly/io/async/AsyncTransport.h>
 
 #include "mcrouter/lib/debug/ConnectionFifoProtocol.h"
@@ -36,10 +35,12 @@ class ConnectionFifo {
    *
    * @param debugFifo   Underlying FIFO to which the data will be written.
    * @param transport   Transport from which data will be mirrored.
+   * @param routerName  Name of the router.
    */
   ConnectionFifo(
       std::shared_ptr<Fifo> debugFifo,
-      const folly::AsyncTransportWrapper* transport) noexcept;
+      const folly::AsyncTransportWrapper* transport,
+      folly::StringPiece routerName) noexcept;
 
   /**
    * Tells whether or not there is a client connected to the underlying FIFO.

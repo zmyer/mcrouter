@@ -1,16 +1,15 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "Compression.h"
 
+#include <memory>
+
 #include <folly/Format.h>
-#include <folly/Memory.h>
 #include <folly/Portability.h>
 #include <folly/io/IOBuf.h>
 
@@ -85,7 +84,7 @@ std::unique_ptr<folly::IOBuf> wrapIovec(
 class NoCompressionCodec : public CompressionCodec {
  public:
   NoCompressionCodec(
-      std::unique_ptr<folly::IOBuf> dictionary,
+      std::unique_ptr<folly::IOBuf> /* dictionary */,
       uint32_t id,
       FilteringOptions codecFilteringOptions,
       uint32_t codecCompressionLevel)
@@ -96,13 +95,13 @@ class NoCompressionCodec : public CompressionCodec {
             codecCompressionLevel) {}
 
   std::unique_ptr<folly::IOBuf> compress(const struct iovec* iov, size_t iovcnt)
-      override final {
+      final {
     return wrapIovec(iov, iovcnt);
   }
   std::unique_ptr<folly::IOBuf> uncompress(
       const struct iovec* iov,
       size_t iovcnt,
-      size_t uncompressedLength = 0) override final {
+      size_t /* uncompressedLength */ = 0) final {
     return wrapIovec(iov, iovcnt);
   }
 };
@@ -120,14 +119,14 @@ std::unique_ptr<CompressionCodec> createCompressionCodec(
     uint32_t codecCompressionLevel) {
   switch (type) {
     case CompressionCodecType::NO_COMPRESSION:
-      return folly::make_unique<NoCompressionCodec>(
+      return std::make_unique<NoCompressionCodec>(
           std::move(dictionary),
           id,
           codecFilteringOptions,
           codecCompressionLevel);
     case CompressionCodecType::LZ4:
-#if FOLLY_HAVE_LIBLZ4
-      return folly::make_unique<Lz4CompressionCodec>(
+#if FOLLY_HAVE_LIBLZ4 && !defined(DISABLE_COMPRESSION)
+      return std::make_unique<Lz4CompressionCodec>(
           std::move(dictionary),
           id,
           codecFilteringOptions,
@@ -135,16 +134,16 @@ std::unique_ptr<CompressionCodec> createCompressionCodec(
 #else
       LOG(ERROR) << "LZ4 is not available. Returning nullptr.";
       return nullptr;
-#endif // FOLLY_HAVE_LIBLZ4
+#endif // FOLLY_HAVE_LIBLZ4 && !defined(DISABLE_COMPRESSION)
     case CompressionCodecType::LZ4Immutable:
-      return folly::make_unique<Lz4ImmutableCompressionCodec>(
+      return std::make_unique<Lz4ImmutableCompressionCodec>(
           std::move(dictionary),
           id,
           codecFilteringOptions,
           codecCompressionLevel);
     case CompressionCodecType::ZSTD:
-#if FOLLY_HAVE_LIBZSTD
-      return folly::make_unique<ZstdCompressionCodec>(
+#if FOLLY_HAVE_LIBLZ4 && !defined(DISABLE_COMPRESSION)
+      return std::make_unique<ZstdCompressionCodec>(
           std::move(dictionary),
           id,
           codecFilteringOptions,
@@ -152,7 +151,7 @@ std::unique_ptr<CompressionCodec> createCompressionCodec(
 #else
       LOG(ERROR) << "ZSTD is not available. Returning nullptr.";
       return nullptr;
-#endif // FOLLY_HAVE_LIBZSTD
+#endif // FOLLY_HAVE_LIBZSTD && !defined(DISABLE_COMPRESSION)
   }
   return nullptr;
 }

@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2015-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "mcrouter/CarbonRouterInstance.h"
@@ -31,9 +29,11 @@ template <class Request>
 void bumpCarbonRouterClientStats(
     CacheClientStats& stats,
     const Request& req,
-    const ReplyT<Request>& reply,
+    const ReplyT<Request>&,
     carbon::UpdateLikeT<Request> = 0) {
-  auto valueBytes = req.value().computeChainDataLength();
+  auto valueBytes = carbon::valuePtrUnsafe(req)
+      ? carbon::valuePtrUnsafe(req)->computeChainDataLength()
+      : 0;
   stats.recordUpdateRequest(req.key().fullKey().size(), valueBytes);
 }
 
@@ -41,7 +41,7 @@ template <class Request>
 void bumpCarbonRouterClientStats(
     CacheClientStats& stats,
     const Request& req,
-    const ReplyT<Request>& reply,
+    const ReplyT<Request>&,
     carbon::ArithmeticLikeT<Request> = 0) {
   stats.recordUpdateRequest(req.key().fullKey().size(), 0);
 }
@@ -50,16 +50,16 @@ template <class Request>
 void bumpCarbonRouterClientStats(
     CacheClientStats& stats,
     const Request& req,
-    const ReplyT<Request>& reply,
+    const ReplyT<Request>&,
     carbon::DeleteLikeT<Request> = 0) {
   stats.recordInvalidateRequest(req.key().fullKey().size());
 }
 
 template <class Request>
 void bumpCarbonRouterClientStats(
-    CacheClientStats& stats,
-    const Request& req,
-    const ReplyT<Request>& reply,
+    CacheClientStats&,
+    const Request&,
+    const ReplyT<Request>&,
     carbon::OtherThanT<
         Request,
         carbon::GetLike<>,

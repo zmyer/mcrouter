@@ -2,7 +2,6 @@ SUBDIRS = cpp_unit_tests .
 
 TESTS = \
   ../lib/config/test/mcrouter_config_test \
-  ../lib/cycles/test/mcrouter_cycles_test \
   ../lib/fbi/cpp/test/mcrouter_fbi_cpp_test \
   ../lib/fbi/test/mcrouter_fbi_hash_test \
   ../lib/fbi/test/mcrouter_fbi_test \
@@ -34,6 +33,7 @@ TESTS += \
   test_mcrouter_errors.py \
   test_mcrouter_sanity_mock.py \
   test_mcrouter_to_mcrouter_tko.py \
+  test_memcache_router.py \
   test_migrated_failover.py \
   test_miss_on_error_arith_ops.py \
   test_modify_exptime.py \

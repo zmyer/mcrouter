@@ -1,21 +1,20 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include <gtest/gtest.h>
 
+#include "mcrouter/lib/network/McSSLUtil.h"
 #include "mcrouter/lib/network/test/TestClientServerUtil.h"
 
 using namespace facebook::memcache;
 using namespace facebook::memcache::test;
 
-struct VeryifyCommonNameOnRequest {
-  VeryifyCommonNameOnRequest(std::atomic<bool>&, bool) {}
+struct VerifyCommonNameOnRequest {
+  VerifyCommonNameOnRequest(folly::fibers::Baton&, bool) {}
 
   template <class Request>
   void onRequest(McServerRequestContext&& ctx, Request&&) {
@@ -35,13 +34,18 @@ struct VeryifyCommonNameOnRequest {
 };
 
 TEST(AsyncMcServer, sslCertCommonName) {
-  auto server =
-      TestServer::create<VeryifyCommonNameOnRequest>(false, true /* use ssl */);
+  TestServer::Config config;
+  config.outOfOrder = false;
+  auto server = TestServer::create(std::move(config));
 
   LOG(INFO) << "creating client";
 
   TestClient clientWithSsl(
-      "localhost", server->getListenPort(), 200, mc_ascii_protocol, validSsl());
+      "localhost",
+      server->getListenPort(),
+      200,
+      mc_ascii_protocol,
+      validClientSsl());
   clientWithSsl.sendGet("empty", mc_res_found);
   clientWithSsl.waitForReplies();
 
@@ -54,4 +58,25 @@ TEST(AsyncMcServer, sslCertCommonName) {
   server->shutdown();
   server->join();
   EXPECT_EQ(2, server->getAcceptedConns());
+}
+
+TEST(AsyncMcServer, sslVerify) {
+  McSSLUtil::setApplicationSSLVerifier(
+      [](folly::AsyncSSLSocket*, bool, X509_STORE_CTX*) { return false; });
+  TestServer::Config config;
+  config.outOfOrder = false;
+  auto server = TestServer::create(std::move(config));
+
+  TestClient sadClient(
+      "localhost",
+      server->getListenPort(),
+      200,
+      mc_ascii_protocol,
+      validClientSsl());
+  sadClient.sendGet("empty", mc_res_connect_error);
+  sadClient.waitForReplies();
+
+  server->shutdown();
+  server->join();
+  EXPECT_EQ(1, server->getAcceptedConns());
 }

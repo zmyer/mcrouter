@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -33,6 +31,11 @@ struct AsyncMcServerWorkerOptions {
    * is completed.
    */
   bool singleWrite{false};
+
+  /**
+   * If true, time measurement in event base is enabled.
+   */
+  bool enableEventBaseTimeMeasurement{false};
 
   /**
    * Maximum number of read system calls per event loop iteration.
@@ -94,6 +97,15 @@ struct AsyncMcServerWorkerOptions {
    * The congestion controller for memory utilization at the server.
    */
   std::shared_ptr<MemoryController> memController;
+
+  /**
+   * EXPERIMENTAL FEATURE!
+   *
+   * If non-zero, enables server sending OOB GoAway messages to clients,
+   * signaling them that the server is about to disappear and the client should
+   * stop sending requests over this connection after processing this message.
+   */
+  std::chrono::milliseconds goAwayTimeout{0};
 };
-}
-} // facebook::memcache
+} // memcache
+} // facebook

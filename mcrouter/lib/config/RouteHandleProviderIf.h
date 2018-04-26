@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -14,6 +12,7 @@
 #include <vector>
 
 #include <folly/Range.h>
+#include <folly/dynamic.h>
 
 namespace folly {
 struct dynamic;
@@ -36,16 +35,26 @@ class RouteHandleProviderIf {
    * Creates list of RouteHandles by given type and JSON representation. Should
    * also validate passed object and throw exception in case JSON is incorrect.
    *
-   * @param factory RouteHandleFactory to create children routes.
-   * @param type which RouteHandle is represented by json.
-   * @param json JSON object with RouteHandle representation.
+   * @param factory   RouteHandleFactory to create children routes.
+   * @param type      Which RouteHandle is represented by json.
+   * @param json      JSON object with RouteHandle representation.
    */
   virtual std::vector<std::shared_ptr<RouteHandleIf>> create(
       RouteHandleFactory<RouteHandleIf>& factory,
       folly::StringPiece type,
       const folly::dynamic& json) = 0;
 
-  virtual ~RouteHandleProviderIf(){};
+  /**
+   * Loads a pool from ConfigApi, expand `inherit`, etc.
+   *
+   * @param json  Json with the pool information.
+   *
+   * @return      The folly::dynamic object with pool name and final json blob.
+   */
+  virtual const folly::dynamic& parsePool(const folly::dynamic& json) = 0;
+
+  virtual ~RouteHandleProviderIf() {}
 };
-}
-} // facebook::memcache
+
+} // namespace memcache
+} // namespace facebook

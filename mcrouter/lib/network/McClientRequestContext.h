@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2015-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -41,6 +39,7 @@ class McClientRequestContextBase
 
   McSerializedRequest reqContext;
   uint64_t id;
+  bool isBatchTail{false};
 
   McClientRequestContextBase(const McClientRequestContextBase&) = delete;
   McClientRequestContextBase& operator=(
@@ -48,12 +47,6 @@ class McClientRequestContextBase
   McClientRequestContextBase(McClientRequestContextBase&&) = delete;
   McClientRequestContextBase& operator=(McClientRequestContextBase&& other) =
       delete;
-
-  /**
-   * Returns fake data (specific to this request and operation) that can be used
-   * to simulate a reply from network
-   */
-  virtual const char* fakeReply() const = 0;
 
   /**
    * Get string representation of a type of the context.
@@ -66,7 +59,7 @@ class McClientRequestContextBase
    *
    * Should be called only when the request is not in a queue.
    */
-  void replyError(mc_res_t result);
+  void replyError(mc_res_t result, folly::StringPiece errorMessage);
 
   /**
    * Schedule a timeout so that the request does not wait
@@ -100,7 +93,6 @@ class McClientRequestContextBase
       const Request& request,
       uint64_t reqid,
       mc_protocol_t protocol,
-      std::shared_ptr<AsyncMcClientImpl> client,
       folly::Optional<ReplyT<Request>>& replyStorage,
       McClientRequestContextQueue& queue,
       InitializerFuncPtr initializer,
@@ -110,7 +102,9 @@ class McClientRequestContextBase
 
   virtual void sendTraceOnReply() = 0;
 
-  virtual void replyErrorImpl(mc_res_t result) = 0;
+  virtual void replyErrorImpl(
+      mc_res_t result,
+      folly::StringPiece errorMessage) = 0;
 
   ReqState state() const {
     return state_;
@@ -130,7 +124,6 @@ class McClientRequestContextBase
  private:
   friend class McClientRequestContextQueue;
 
-  std::shared_ptr<AsyncMcClientImpl> client_;
   std::type_index replyType_;
   folly::SafeIntrusiveListHook hook_;
   void* replyStorage_;
@@ -195,16 +188,13 @@ class McClientRequestContext : public McClientRequestContextBase {
       const Request& request,
       uint64_t reqid,
       mc_protocol_t protocol,
-      std::shared_ptr<AsyncMcClientImpl> client,
       McClientRequestContextQueue& queue,
       McClientRequestContextBase::InitializerFuncPtr,
       const std::function<void(int pendingDiff, int inflightDiff)>&
           onStateChange,
       const CodecIdRange& supportedCodecs);
 
-  const char* fakeReply() const override final;
-
-  virtual std::string getContextTypeStr() const override final;
+  std::string getContextTypeStr() const final;
 
   Reply waitForReply(std::chrono::milliseconds timeout);
 
@@ -214,8 +204,8 @@ class McClientRequestContext : public McClientRequestContextBase {
 #ifndef LIBMC_FBTRACE_DISABLE
   const mc_fbtrace_info_s* fbtraceInfo_;
 #endif
-  void sendTraceOnReply() override final;
-  void replyErrorImpl(mc_res_t result) override final;
+  void sendTraceOnReply() final;
+  void replyErrorImpl(mc_res_t result, folly::StringPiece errorMessage) final;
 };
 
 class McClientRequestContextQueue {
@@ -236,13 +226,13 @@ class McClientRequestContextQueue {
    * Fails all requests that were already sent (i.e. pending reply) with a given
    * error code.
    */
-  void failAllSent(mc_res_t error);
+  void failAllSent(mc_res_t error, folly::StringPiece errorMessage);
 
   /**
    * Fails all requests that were not sent yet (i.e. pending) with a given error
    * code.
    */
-  void failAllPending(mc_res_t error);
+  void failAllPending(mc_res_t error, folly::StringPiece errorMessage);
 
   /**
    * Return an id of the first pending request.
@@ -256,6 +246,13 @@ class McClientRequestContextQueue {
    * Adds request into pending queue.
    */
   void markAsPending(McClientRequestContextBase& req);
+
+  /**
+   * Peek next request that we're about to send.
+   *
+   * @return a reference to the next request in the pending queue.
+   */
+  McClientRequestContextBase& peekNextPending();
 
   /**
    * Moves the first request from pending queue into sending queue.
@@ -330,7 +327,10 @@ class McClientRequestContextQueue {
   std::queue<McClientRequestContextBase::InitializerFuncPtr>
       timedOutInitializers_;
 
-  void failQueue(McClientRequestContextBase::Queue& queue, mc_res_t error);
+  void failQueue(
+      McClientRequestContextBase::Queue& queue,
+      mc_res_t error,
+      folly::StringPiece errorMessage);
 
   McClientRequestContextBase::UnorderedSet::iterator getContextById(
       uint64_t id);

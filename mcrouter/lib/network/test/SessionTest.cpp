@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include <string>
@@ -130,15 +128,15 @@ TEST(Session, quit) {
 TEST(Session, closeBeforeReply) {
   struct Callbacks : public McServerSession::StateCallback {
    public:
-    void onWriteQuiescence(McServerSession&) override final {
+    void onWriteQuiescence(McServerSession&) final {
       EXPECT_EQ(state_, ACTIVE);
     }
-    void onCloseStart(McServerSession&) override final {}
-    void onCloseFinish(McServerSession&) override final {
+    void onCloseStart(McServerSession&) final {}
+    void onCloseFinish(McServerSession&) final {
       EXPECT_EQ(state_, ACTIVE);
       state_ = CLOSED;
     }
-    void onShutdown() override final {}
+    void onShutdown() final {}
 
    private:
     enum State { ACTIVE, CLOSED };

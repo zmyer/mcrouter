@@ -1,17 +1,14 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include <string>
 
 #include <gtest/gtest.h>
 
-#include <folly/Memory.h>
 #include <folly/io/async/EventBase.h>
 #include <folly/json.h>
 
@@ -31,13 +28,6 @@ namespace {
 
 const char* const kMemcacheConfig = "mcrouter/test/test_ascii.json";
 
-const char* const kAsynclogRoute =
-    R"({
-  "type": "AsynclogRoute",
-  "name": "test",
-  "target": "NullRoute"
- })";
-
 const char* const kConstShard =
     R"({
   "type": "HashRoute",
@@ -48,7 +38,7 @@ const char* const kConstShard =
 const char* const kInvalidHashFunc =
     R"({
   "type": "HashRoute",
-  "children": "ErrorRoute",
+  "children": ["ErrorRoute", "ErrorRoute"],
   "hash_func": "InvalidHashFunc"
  })";
 
@@ -98,16 +88,6 @@ struct TestSetup {
 };
 
 } // anonymous
-
-TEST(McRouteHandleProviderTest, asynclog_route) {
-  TestSetup setup;
-  auto rh = setup.getRoute(kAsynclogRoute);
-  EXPECT_TRUE(rh != nullptr);
-  EXPECT_EQ("asynclog:test", rh->routeName());
-  auto asynclogRoutes = setup.provider().releaseAsyncLogRoutes();
-  EXPECT_EQ(1, asynclogRoutes.size());
-  EXPECT_EQ("asynclog:test", asynclogRoutes["test"]->routeName());
-}
 
 TEST(McRouteHandleProviderTest, sanity) {
   auto rh = TestSetup().getRoute(kConstShard);

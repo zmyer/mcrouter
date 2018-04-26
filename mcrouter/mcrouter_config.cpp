@@ -1,14 +1,15 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
-#include <folly/Memory.h>
+#include <memory>
+
+#include <folly/FileUtil.h>
 #include <folly/Range.h>
+#include <folly/json.h>
 
 #include "mcrouter/CarbonRouterInstanceBase.h"
 #include "mcrouter/McrouterLogger.h"
@@ -16,13 +17,19 @@
 #include "mcrouter/config.h"
 #include "mcrouter/flavor.h"
 #include "mcrouter/options.h"
-#include "mcrouter/routes/McExtraRouteHandleProvider.h"
 #include "mcrouter/routes/McrouterRouteHandle.h"
 #include "mcrouter/standalone_options.h"
 
 namespace facebook {
 namespace memcache {
 namespace mcrouter {
+
+bool readLibmcrouterFlavor(
+    folly::StringPiece flavor,
+    std::unordered_map<std::string, std::string>& options) {
+  std::unordered_map<std::string, std::string> standaloneOptions;
+  return read_standalone_flavor(flavor.str(), options, standaloneOptions);
+}
 
 bool read_standalone_flavor(
     const std::string& flavor,
@@ -37,21 +44,16 @@ bool read_standalone_flavor(
 }
 
 std::unique_ptr<ConfigApi> createConfigApi(const McrouterOptions& opts) {
-  return folly::make_unique<ConfigApi>(opts);
+  return std::make_unique<ConfigApi>(opts);
 }
 
 std::string performOptionSubstitution(std::string str) {
   return str;
 }
 
-std::unique_ptr<ExtraRouteHandleProviderIf<MemcacheRouterInfo>>
-createExtraRouteHandleProvider() {
-  return folly::make_unique<McExtraRouteHandleProvider<MemcacheRouterInfo>>();
-}
-
 std::unique_ptr<McrouterLogger> createMcrouterLogger(
     CarbonRouterInstanceBase& router) {
-  return folly::make_unique<McrouterLogger>(router);
+  return std::make_unique<McrouterLogger>(router);
 }
 
 void extraValidateOptions(const McrouterOptions& opts) {
@@ -119,6 +121,24 @@ std::string getBinPath(folly::StringPiece name) {
   }
   return "unknown";
 }
+
+std::string getDefaultPemCertPath() {
+  return "";
 }
+
+std::string getDefaultPemCertKey() {
+  return "";
 }
-} // facebook::memcache::mcrouter
+
+folly::dynamic readStaticJsonFile(folly::StringPiece file) {
+  std::string contents;
+  if (!folly::readFile(file.str().c_str(), contents)) {
+    LOG(ERROR) << "Failed to open pool-stats-config-file " << file.str();
+    return nullptr;
+  }
+  return folly::parseJson(contents);
+}
+
+} // mcrouter
+} // memcache
+} // facebook

@@ -1,15 +1,13 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2015-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include <arpa/inet.h>
 
-#include <folly/Bits.h>
+#include <folly/lang/Bits.h>
 
 #include "mcrouter/lib/IOBufUtil.h"
 #include "mcrouter/lib/McResUtil.h"
@@ -318,10 +316,10 @@ struct FieldPolicyHandler<List<Tags...>> {
   parseField(
       Op,
       Tag,
-      Message& message,
-      const folly::IOBuf& source,
-      const uint8_t* body,
-      const um_elist_entry_t& entry) {
+      Message& /* message */,
+      const folly::IOBuf& /* source */,
+      const uint8_t* /* body */,
+      const um_elist_entry_t& /* entry */) {
     // If we're parsing a field that's not in the tags list, something is wrong
     LOG(ERROR) << "Parsing unexpected field with tag type "
                << typeid(Tag).name() << " for operation " << typeid(Op).name()
@@ -334,8 +332,8 @@ void parseFieldImpl(
     Op,
     CasTag,
     Message& message,
-    const folly::IOBuf& source,
-    const uint8_t* body,
+    const folly::IOBuf& /* source */,
+    const uint8_t* /* body */,
     const um_elist_entry_t& entry) {
   message.casToken() = folly::Endian::big((uint64_t)entry.data.val);
 }
@@ -345,8 +343,8 @@ void parseFieldImpl(
     Op,
     DeltaTag,
     Message& message,
-    const folly::IOBuf& source,
-    const uint8_t* body,
+    const folly::IOBuf& /* source */,
+    const uint8_t* /* body */,
     const um_elist_entry_t& entry) {
   message.delta() = folly::Endian::big((uint64_t)entry.data.val);
 }
@@ -356,8 +354,8 @@ void parseFieldImpl(
     Op,
     ErrCodeTag,
     Message& message,
-    const folly::IOBuf& source,
-    const uint8_t* body,
+    const folly::IOBuf& /* source */,
+    const uint8_t* /* body */,
     const um_elist_entry_t& entry) {
   message.appSpecificErrorCode() = folly::Endian::big((uint64_t)entry.data.val);
 }
@@ -367,8 +365,8 @@ void parseFieldImpl(
     Op,
     ExptimeTag,
     Message& message,
-    const folly::IOBuf& source,
-    const uint8_t* body,
+    const folly::IOBuf& /* source */,
+    const uint8_t* /* body */,
     const um_elist_entry_t& entry) {
   setExptime(message, folly::Endian::big((uint64_t)entry.data.val));
 }
@@ -378,8 +376,8 @@ void parseFieldImpl(
     Op,
     FlagsTag,
     Message& message,
-    const folly::IOBuf& source,
-    const uint8_t* body,
+    const folly::IOBuf& /* source */,
+    const uint8_t* /* body */,
     const um_elist_entry_t& entry) {
   setFlags(message, folly::Endian::big((uint64_t)entry.data.val));
 }
@@ -389,8 +387,8 @@ void parseFieldImpl(
     Op,
     LeaseTokenTag,
     Message& message,
-    const folly::IOBuf& source,
-    const uint8_t* body,
+    const folly::IOBuf& /* source */,
+    const uint8_t* /* body */,
     const um_elist_entry_t& entry) {
   message.leaseToken() = folly::Endian::big((uint64_t)entry.data.val);
 }
@@ -400,8 +398,8 @@ void parseFieldImpl(
     Op,
     NumberTag,
     Message& message,
-    const folly::IOBuf& source,
-    const uint8_t* body,
+    const folly::IOBuf& /* source */,
+    const uint8_t* /* body */,
     const um_elist_entry_t& entry) {
   message.age() = folly::Endian::big((uint64_t)entry.data.val);
 }
@@ -411,8 +409,8 @@ void parseFieldImpl(
     Op,
     ResultTag,
     Message& message,
-    const folly::IOBuf& source,
-    const uint8_t* body,
+    const folly::IOBuf& /* source */,
+    const uint8_t* /* body */,
     const um_elist_entry_t& entry) {
   auto umResult = folly::Endian::big((uint64_t)entry.data.val);
   if (umResult >= mc_nres) {
@@ -526,7 +524,7 @@ void umbrellaParseMessage(
     const uint8_t* header,
     size_t nheader,
     const uint8_t* body,
-    size_t nbody) {
+    size_t /* nbody */) {
   auto msg = reinterpret_cast<const entry_list_msg_t*>(header);
   size_t nentries = folly::Endian::big((uint16_t)msg->nentries);
   if (reinterpret_cast<const uint8_t*>(&msg->entries[nentries]) !=
@@ -592,6 +590,18 @@ void umbrellaParseMessage(
   }
 }
 
+template <class Request>
+typename std::enable_if<Request::hasKey, folly::StringPiece>::type getKey(
+    const Request& req) {
+  return req.key().fullKey();
+}
+
+template <class Request>
+typename std::enable_if<!Request::hasKey, folly::StringPiece>::type getKey(
+    const Request&) {
+  return folly::StringPiece();
+}
+
 } // detail
 
 template <class Request>
@@ -630,7 +640,7 @@ bool UmbrellaSerializedMessage::prepareRequestImpl(
   // Serialize type-specific fields, e.g., cas token for cas requests
   prepareHelper(request);
 
-  auto key = request.key().fullKey();
+  auto key = detail::getKey(request);
   if (key.begin() != nullptr) {
     appendString(
         msg_key, reinterpret_cast<const uint8_t*>(key.begin()), key.size());

@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2015, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 // @nolint
@@ -23,6 +21,13 @@ MCROUTER_OPTION_GROUP("Standalone mcrouter options")
 
 MCROUTER_OPTION_STRING(log_file, "", "log-path", 'L', "Log file path")
 
+MCROUTER_OPTION_STRING(
+    carbon_router_name,
+    "Memcache",
+    "carbon-router-name",
+    no_short,
+    "Name of the carbon router to use")
+
 MCROUTER_OPTION_OTHER(
     std::vector<uint16_t>,
     ports,
@@ -38,6 +43,12 @@ MCROUTER_OPTION_OTHER(
     "ssl-port",
     no_short,
     "SSL Port(s) to listen on (comma separated)")
+
+MCROUTER_OPTION_STRING(
+  tls_ticket_key_seed_path, "",
+  "tls-ticket-key-seed-path", no_short,
+  "Path to file containing JSON object for old, current, and new seeds"
+  " used to generate TLS ticket keys")
 
 MCROUTER_OPTION_INTEGER(
     int,
@@ -118,7 +129,25 @@ MCROUTER_OPTION_INTEGER(
     "client-timeout",
     no_short,
     "Timeout for sending replies back to clients, in milliseconds. "
-    "(0 to disable)");
+    "(0 to disable)")
+
+MCROUTER_OPTION_INTEGER(
+    uint64_t,
+    server_load_interval_ms,
+    0,
+    "server-load-interval-ms",
+    no_short,
+    "How often to collect server load data. "
+    "(0 to disable exposing server load)")
+
+MCROUTER_OPTION_INTEGER(
+    uint32_t,
+    tfo_queue_size,
+    100000,
+    "tfo-queue-size",
+    no_short,
+    "TFO queue size for SSL connections.  "
+    "(only matters if ssl tfo is enabled)")
 
 #ifdef ADDITIONAL_STANDALONE_OPTIONS_FILE
 #include ADDITIONAL_STANDALONE_OPTIONS_FILE

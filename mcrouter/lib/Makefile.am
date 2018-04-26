@@ -1,17 +1,23 @@
-SUBDIRS = . config cycles fbi network test
+SUBDIRS = . config fbi network test
 
 noinst_LIBRARIES = libmcrouter.a
 
 libmcrouter_a_SOURCES = \
+  AuxiliaryCPUThreadPool.h \
+  AuxiliaryCPUThreadPool.cpp \
   CacheClientStats.h \
   Ch3HashFunc.h \
+  Clocks.cpp \
+  Clocks.h \
   Compression.cpp \
   Compression.h \
   CompressionCodecManager.cpp \
   CompressionCodecManager.h \
   Crc32HashFunc.h \
-  FailoverErrorsSettings.cpp \
+  FailoverErrorsSettingsBase.cpp \
+  FailoverErrorsSettingsBase.h \
   FailoverErrorsSettings.h \
+  HashUtil.h \
   IOBufUtil.cpp \
   IOBufUtil.h \
   IovecCursor-inl.h \
@@ -28,17 +34,21 @@ libmcrouter_a_SOURCES = \
   McOpList.h \
   McOperation.h \
   McOperationTraits.h \
-  McRequestList.h \
   McResUtil.h \
   Operation.h \
   OperationTraits.h \
   Ref.h \
+  RendezvousHashFunc.cpp \
+  RendezvousHashFunc.h \
   Reply.h \
   RouteHandleTraverser.h \
+  SelectionRouteFactory.h \
   StatsReply.cpp \
   StatsReply.h \
   WeightedCh3HashFunc.cpp \
   WeightedCh3HashFunc.h \
+  WeightedRendezvousHashFunc.cpp \
+  WeightedRendezvousHashFunc.h \
   ZstdCompressionCodec.cpp \
   ZstdCompressionCodec.h \
   carbon/Fields.h \
@@ -71,15 +81,6 @@ libmcrouter_a_SOURCES = \
   config/RouteHandleFactory-inl.h \
   config/RouteHandleFactory.h \
   config/RouteHandleProviderIf.h \
-  cycles/Accumulator.cpp \
-  cycles/Accumulator.h \
-  cycles/Clocks.cpp \
-  cycles/Clocks.h \
-  cycles/Cycles.cpp \
-  cycles/Cycles.h \
-  cycles/ExtractorThread.cpp \
-  cycles/ExtractorThread.h \
-  cycles/Interval.h \
   debug/ConnectionFifo.cpp \
   debug/ConnectionFifo.h \
   debug/ConnectionFifoProtocol.cpp \
@@ -104,21 +105,17 @@ libmcrouter_a_SOURCES = \
   fbi/cpp/sfrlock.h \
   fbi/cpp/util.cpp \
   fbi/cpp/util.h \
-  fbi/debug.c \
-  fbi/debug.h \
   fbi/decls.h \
   fbi/hash.c \
   fbi/hash.h \
   fbi/network.c \
   fbi/network.h \
-  fbi/nstring.c \
-  fbi/nstring.h \
   fbi/queue.h \
   fbi/sfrlock.c \
   fbi/sfrlock.h \
   fbi/time.h \
   fbi/util.h \
-  mc/msg.c \
+  mc/msg.cpp \
   mc/msg.h \
   mc/protocol.h \
   mc/umbrella.c \
@@ -177,13 +174,15 @@ libmcrouter_a_SOURCES = \
   network/McServerRequestContext.h \
   network/McServerSession.cpp \
   network/McServerSession.h \
+  network/McSSLUtil.cpp \
+  network/McSSLUtil.h \
   network/MemcacheMessageHelpers.h \
   network/MemoryController.cpp \
   network/MemoryController.h \
-  network/MockMcClientTransport.cpp \
-  network/MockMcClientTransport.h \
   network/MultiOpParent.cpp \
   network/MultiOpParent.h \
+  network/ServerLoad.cpp \
+  network/ServerLoad.h \
   network/ServerMcParser-inl.h \
   network/ServerMcParser.h \
   network/ThreadLocalSSLContextProvider.cpp \
@@ -198,23 +197,20 @@ libmcrouter_a_SOURCES = \
   routes/AllInitialRoute.h \
   routes/AllMajorityRoute.h \
   routes/AllSyncRoute.h \
-  routes/ErrorRoute.h \
-  routes/HashRoute.h \
+  routes/LoadBalancerRoute.h \
   routes/LoggingRoute.h \
   routes/MigrateRoute.h \
   routes/NullRoute.h \
-  routes/RandomRoute.h
+  routes/RandomRoute.h \
+  routes/SelectionRoute.h
 
 libmcrouter_a_CPPFLAGS = -I$(top_srcdir)/..
 libmcrouter_a_CFLAGS = -I$(top_srcdir)/..
 
 # build gtest on check
-check_LTLIBRARIES = libgtest.la libgtestmain.la
+check_LTLIBRARIES = libtestmain.la
 check_PROGRAMS =
 
-libgtest_la_CPPFLAGS = -Igtest/include -Igtest
-libgtest_la_SOURCES = gtest/src/gtest-all.cc
-
-libgtestmain_la_CPPFLAGS = -Igtest/include -Igtest
-libgtestmain_la_SOURCES = gtest/src/gtest_main.cc
-libgtestmain_la_LIBADD = libgtest.la
+libtestmain_la_CPPFLAGS = -Igtest/include -Igtest
+libtestmain_la_SOURCES = TestMain.cpp gtest/src/gtest-all.cc
+libtestmain_la_LIBADD = -lfolly -lfollyinit

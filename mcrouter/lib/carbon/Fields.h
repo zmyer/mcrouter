@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -12,11 +10,9 @@
 #include <string>
 #include <vector>
 
-#include "mcrouter/lib/carbon/SerializationTraits.h"
+#include <folly/Traits.h>
 
-namespace folly {
-class IOBuf;
-} // folly
+#include "mcrouter/lib/carbon/SerializationTraits.h"
 
 namespace carbon {
 
@@ -31,9 +27,8 @@ enum class FieldType : uint8_t {
   Double = 0x7,
   Binary = 0x8,
   List = 0x9,
-  // TODO
-  // Set    = 0xa,
-  // Map    = 0xb,
+  Set = 0xa,
+  Map = 0xb,
   Struct = 0xc,
   Float = 0xd
 };
@@ -50,88 +45,38 @@ class IsCarbonStruct {
   static constexpr bool value{decltype(check<T>(0))::value};
 };
 
+template <class T>
+class IsThriftWrapperStruct {
+  template <class C>
+  static constexpr decltype(
+      std::declval<const C>().getThriftStruct(),
+      std::true_type())
+  check(int);
+
+  template <class C>
+  static constexpr std::false_type check(...);
+
+ public:
+  static constexpr bool value{decltype(check<T>(0))::value &&
+                              IsCarbonStruct<T>::value};
+};
+
+template <class T>
+class IsCarbonUnion {
+  template <class C>
+  static constexpr decltype(&C::which, std::true_type()) check(int);
+
+  template <class C>
+  static constexpr std::false_type check(...);
+
+ public:
+  static constexpr bool value{decltype(check<T>(0))::value};
+};
+
 namespace detail {
 
 template <class T>
-struct TypeToField {};
-
-template <>
-struct TypeToField<bool> {
-  static constexpr FieldType fieldType{FieldType::True};
-};
-
-template <>
-struct TypeToField<char> {
-  static constexpr FieldType fieldType{FieldType::Int8};
-};
-
-template <>
-struct TypeToField<int8_t> {
-  static constexpr FieldType fieldType{FieldType::Int8};
-};
-
-template <>
-struct TypeToField<int16_t> {
-  static constexpr FieldType fieldType{FieldType::Int16};
-};
-
-template <>
-struct TypeToField<int32_t> {
-  static constexpr FieldType fieldType{FieldType::Int32};
-};
-
-template <>
-struct TypeToField<int64_t> {
-  static constexpr FieldType fieldType{FieldType::Int64};
-};
-
-template <>
-struct TypeToField<uint8_t> {
-  static constexpr FieldType fieldType{FieldType::Int8};
-};
-
-template <>
-struct TypeToField<uint16_t> {
-  static constexpr FieldType fieldType{FieldType::Int16};
-};
-
-template <>
-struct TypeToField<uint32_t> {
-  static constexpr FieldType fieldType{FieldType::Int32};
-};
-
-template <>
-struct TypeToField<uint64_t> {
-  static constexpr FieldType fieldType{FieldType::Int64};
-};
-
-template <>
-struct TypeToField<float> {
-  static constexpr FieldType fieldType{FieldType::Float};
-};
-
-template <>
-struct TypeToField<double> {
-  static constexpr FieldType fieldType{FieldType::Double};
-};
-
-template <>
-struct TypeToField<std::string> {
-  static constexpr FieldType fieldType{FieldType::Binary};
-};
-
-template <>
-struct TypeToField<folly::IOBuf> {
-  static constexpr FieldType fieldType{FieldType::Binary};
-};
-
-template <class T>
-struct TypeToField<std::vector<T>> {
-  static constexpr FieldType fieldType{FieldType::List};
-};
-
-template <class T>
-class SerializationTraitsDefined {
+class IsUserReadWriteDefined {
   template <class C>
   static constexpr decltype(
       SerializationTraits<C>::read,
@@ -147,10 +92,10 @@ class SerializationTraitsDefined {
 };
 
 template <class T>
-class HasFieldType {
+class IsSerializableViaTraits {
   template <class C>
-  static constexpr decltype(TypeToField<C>::fieldType, std::true_type()) check(
-      int);
+  static constexpr decltype(SerializationTraits<C>::kWireType, std::true_type())
+  check(int);
 
   template <class C>
   static constexpr std::false_type check(...);
@@ -158,5 +103,104 @@ class HasFieldType {
  public:
   static constexpr bool value{decltype(check<T>(0))::value};
 };
+
+template <class T, FieldType Type, typename Enable = void>
+struct IsOfTraitFieldType;
+
+template <class T, FieldType Type>
+struct IsOfTraitFieldType<
+    T,
+    Type,
+    typename std::enable_if<IsSerializableViaTraits<T>::value>::type> {
+  static constexpr bool value = SerializationTraits<T>::kWireType == Type;
+};
+
+template <class T, FieldType Type>
+struct IsOfTraitFieldType<
+    T,
+    Type,
+    typename std::enable_if<!IsSerializableViaTraits<T>::value>::type> {
+  static constexpr bool value = false;
+};
+
+template <class T>
+struct IsLinearContainer {
+  static constexpr bool value = IsOfTraitFieldType<T, FieldType::List>::value ||
+      IsOfTraitFieldType<T, FieldType::Set>::value;
+};
+
+template <class T>
+struct IsKVContainer {
+  static constexpr bool value = IsOfTraitFieldType<T, FieldType::Map>::value;
+};
+
+template <class T, class Enable = void>
+struct TypeToField {};
+
+template <>
+struct TypeToField<bool> {
+  static constexpr FieldType fieldType{FieldType::True};
+};
+
+template <>
+struct TypeToField<float> {
+  static constexpr FieldType fieldType{FieldType::Float};
+};
+
+template <>
+struct TypeToField<double> {
+  static constexpr FieldType fieldType{FieldType::Double};
+};
+
+template <class T>
+struct TypeToField<
+    T,
+    typename std::enable_if<
+        folly::IsOneOf<T, char, int8_t, uint8_t>::value>::type> {
+  static constexpr FieldType fieldType{FieldType::Int8};
+};
+
+template <class T>
+struct TypeToField<
+    T,
+    typename std::enable_if<
+        folly::IsOneOf<T, int16_t, uint16_t>::value>::type> {
+  static constexpr FieldType fieldType{FieldType::Int16};
+};
+
+template <class T>
+struct TypeToField<
+    T,
+    typename std::enable_if<
+        folly::IsOneOf<T, int32_t, uint32_t>::value>::type> {
+  static constexpr FieldType fieldType{FieldType::Int32};
+};
+
+template <class T>
+struct TypeToField<
+    T,
+    typename std::enable_if<
+        folly::IsOneOf<T, int64_t, uint64_t>::value>::type> {
+  static constexpr FieldType fieldType{FieldType::Int64};
+};
+
+template <class T>
+struct TypeToField<T, typename std::enable_if<std::is_enum<T>::value>::type> {
+  static constexpr FieldType fieldType{
+      TypeToField<typename std::underlying_type<T>::type>::fieldType};
+};
+
+template <class T>
+struct TypeToField<T, typename std::enable_if<IsCarbonStruct<T>::value>::type> {
+  static constexpr FieldType fieldType{FieldType::Struct};
+};
+
+template <class T>
+struct TypeToField<
+    T,
+    typename std::enable_if<IsSerializableViaTraits<T>::value>::type> {
+  static constexpr FieldType fieldType{SerializationTraits<T>::kWireType};
+};
+
 } // detail
 } // carbon

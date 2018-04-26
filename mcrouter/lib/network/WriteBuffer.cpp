@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include <folly/Conv.h>
@@ -24,7 +22,7 @@ WriteBuffer::WriteBuffer(mc_protocol_t protocol) : protocol_(protocol) {
       new (&asciiReply_) AsciiSerializedReply;
       break;
 
-    case mc_umbrella_protocol:
+    case mc_umbrella_protocol_DONOTUSE:
       new (&umbrellaReply_) UmbrellaSerializedMessage;
       break;
 
@@ -43,7 +41,7 @@ WriteBuffer::~WriteBuffer() {
       asciiReply_.~AsciiSerializedReply();
       break;
 
-    case mc_umbrella_protocol:
+    case mc_umbrella_protocol_DONOTUSE:
       umbrellaReply_.~UmbrellaSerializedMessage();
       break;
 
@@ -67,7 +65,7 @@ void WriteBuffer::clear() {
       asciiReply_.clear();
       break;
 
-    case mc_umbrella_protocol:
+    case mc_umbrella_protocol_DONOTUSE:
       umbrellaReply_.clear();
       break;
 
@@ -92,14 +90,16 @@ bool WriteBuffer::isEndContext() const {
   return ctx_.hasValue() ? ctx_->isEndContext() : false;
 }
 
-WriteBuffer::Queue& WriteBufferQueue::initFreeQueue(
+WriteBuffer::List& WriteBufferQueue::initFreeStack(
     mc_protocol_t protocol) noexcept {
   assert(
-      protocol == mc_ascii_protocol || protocol == mc_umbrella_protocol ||
+      protocol == mc_ascii_protocol ||
+      protocol == mc_umbrella_protocol_DONOTUSE ||
       protocol == mc_caret_protocol);
 
-  static thread_local WriteBuffer::Queue freeQ[mc_nprotocols];
-  return freeQ[static_cast<size_t>(protocol)];
+  static thread_local WriteBuffer::List freeBuffers[mc_nprotocols];
+  return freeBuffers[static_cast<size_t>(protocol)];
 }
-}
-} // facebook::memcache
+
+} // memcache
+} // facebook

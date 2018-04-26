@@ -15,6 +15,7 @@ AC_CONFIG_SRCDIR([CarbonRouterInstance.h])
 AC_CONFIG_HEADERS([config.h:config.hin])
 AC_CONFIG_LINKS([config-impl.h:mcrouter_config-impl.h])
 AC_CONFIG_LINKS([test/config.py:test/mcrouter_config.py])
+AC_CONFIG_LINKS([RouterRegistry.h:RouterRegistry-impl.h])
 AC_CONFIG_AUX_DIR([build-aux])
 
 AM_INIT_AUTOMAKE([1.14 foreign dist-bzip2 nostdinc subdir-objects parallel-tests])
@@ -31,15 +32,15 @@ AC_PROG_CXX
 AC_PROG_CC
 AC_PROG_CPP
 AX_PYTHON_DEVEL()
-AX_CXX_COMPILE_STDCXX_11([],[mandatory])
+AX_CXX_COMPILE_STDCXX_14([],[mandatory])
 LT_INIT
 
 CXXFLAGS="-fno-strict-aliasing $CXXFLAGS"
 CXXFLAGS="-W -Wall -Wextra -Wno-unused-parameter $CXXFLAGS"
 CXXFLAGS=" -Wno-missing-field-initializers -Wno-deprecated $CXXFLAGS"
-CXXFLAGS="-DLIBMC_FBTRACE_DISABLE $CXXFLAGS"
+CXXFLAGS="-DLIBMC_FBTRACE_DISABLE -DDISABLE_COMPRESSION $CXXFLAGS"
 
-CFLAGS="-DLIBMC_FBTRACE_DISABLE $CFLAGS"
+CFLAGS="-DLIBMC_FBTRACE_DISABLE -DDISABLE_COMPRESSION $CFLAGS"
 
 # Checks for glog and gflags
 # There are no symbols with C linkage, so we do a try-run
@@ -159,6 +160,7 @@ AM_PATH_PYTHON([2.6],, [:])
 AM_CONDITIONAL([HAVE_PYTHON], [test "$PYTHON" != :])
 
 AH_BOTTOM([#include "mcrouter_config.h"])
+AH_BOTTOM([#include "RouterRegistry.h"])
 
 # Output
 AC_CONFIG_FILES([Makefile
@@ -166,8 +168,6 @@ AC_CONFIG_FILES([Makefile
                  lib/test/Makefile
                  lib/config/Makefile
                  lib/config/test/Makefile
-                 lib/cycles/Makefile
-                 lib/cycles/test/Makefile
                  lib/fbi/Makefile
                  lib/fbi/test/Makefile
                  lib/fbi/cpp/Makefile

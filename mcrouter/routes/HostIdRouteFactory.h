@@ -1,16 +1,14 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
 
-#include <folly/Hash.h>
 #include <folly/dynamic.h>
+#include <folly/hash/Hash.h>
 
 #include "mcrouter/lib/config/RouteHandleBuilder.h"
 #include "mcrouter/lib/config/RouteHandleFactory.h"

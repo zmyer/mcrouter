@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -15,8 +13,9 @@
 #include <folly/Range.h>
 #include <folly/io/IOBuf.h>
 
-#include "mcrouter/lib/carbon/TypeList.h"
+#include "mcrouter/lib/fbi/cpp/TypeList.h"
 #include "mcrouter/lib/fbi/cpp/util.h"
+#include "mcrouter/lib/mc/protocol.h"
 
 namespace facebook {
 namespace memcache {
@@ -34,17 +33,77 @@ struct HasMessage : std::false_type {};
 template <typename T>
 struct HasMessage<T, decltype(std::declval<T>().message())> : std::true_type {};
 
+template <class Request, class = bool&>
+struct HasFailover : public std::false_type {};
+
+template <class Request>
+struct HasFailover<Request, decltype(std::declval<Request>().failover())>
+    : public std::true_type {};
+
+template <class Request>
+typename std::enable_if<HasFailover<Request>::value, void>::type
+setRequestFailover(Request& req) {
+  req.failover() = true;
+}
+
+template <class Request>
+typename std::enable_if<!HasFailover<Request>::value, void>::type
+setRequestFailover(Request& req) {
+  if (!req.key().hasHashStop()) {
+    return;
+  }
+  constexpr folly::StringPiece kFailoverTag = ":failover=1";
+  auto keyWithFailover =
+      folly::to<std::string>(req.key().fullKey(), kFailoverTag);
+  /* It's always safe to not append a failover tag */
+  if (keyWithFailover.size() <= MC_KEY_MAX_LEN) {
+    req.key() = std::move(keyWithFailover);
+  }
+}
+
+template <class RequestList>
+struct GetRequestReplyPairsImpl;
+
+template <class Request, class... Requests>
+struct GetRequestReplyPairsImpl<List<Request, Requests...>> {
+  using type = facebook::memcache::PrependT<
+      facebook::memcache::Pair<Request, typename Request::reply_type>,
+      typename GetRequestReplyPairsImpl<List<Requests...>>::type>;
+};
+
+template <>
+struct GetRequestReplyPairsImpl<List<>> {
+  using type = List<>;
+};
+
 } // detail
 
+template <class RequestList>
+using GetRequestReplyPairs =
+    typename detail::GetRequestReplyPairsImpl<RequestList>::type;
+
 template <typename Reply>
-typename std::enable_if<detail::HasMessage<Reply>::value>::type
-setMessageIfPresent(Reply& reply, std::string msg) {
+typename std::enable_if_t<detail::HasMessage<Reply>::value> setMessageIfPresent(
+    Reply& reply,
+    std::string msg) {
   reply.message() = std::move(msg);
 }
 
 template <typename Reply>
-typename std::enable_if<!detail::HasMessage<Reply>::value>::type
+typename std::enable_if_t<!detail::HasMessage<Reply>::value>
 setMessageIfPresent(Reply&, std::string) {}
+
+template <typename Reply>
+typename std::enable_if_t<detail::HasMessage<Reply>::value, folly::StringPiece>
+getMessage(const Reply& reply) {
+  return reply.message();
+}
+
+template <typename Reply>
+typename std::enable_if_t<!detail::HasMessage<Reply>::value, folly::StringPiece>
+getMessage(const Reply&) {
+  return folly::StringPiece{};
+}
 
 namespace detail {
 inline folly::IOBuf* bufPtr(folly::Optional<folly::IOBuf>& buf) {
@@ -67,7 +126,7 @@ typename std::enable_if<R::hasValue, folly::IOBuf*>::type valuePtrUnsafe(
 }
 template <class R>
 typename std::enable_if<!R::hasValue, folly::IOBuf*>::type valuePtrUnsafe(
-    const R& requestOrReply) {
+    const R& /* requestOrReply */) {
   return nullptr;
 }
 
@@ -80,7 +139,7 @@ typename std::enable_if<R::hasValue, folly::StringPiece>::type valueRangeSlow(
 
 template <class R>
 typename std::enable_if<!R::hasValue, folly::StringPiece>::type valueRangeSlow(
-    R& requestOrReply) {
+    R& /* requestOrReply */) {
   return folly::StringPiece();
 }
 
@@ -118,13 +177,30 @@ template <class TypeList>
 inline size_t getTypeIdByName(folly::StringPiece name, TypeList);
 
 template <>
-inline size_t getTypeIdByName(folly::StringPiece name, List<>) {
+inline size_t getTypeIdByName(folly::StringPiece /* name */, List<>) {
   return 0;
 }
 
 template <class T, class... Ts>
 inline size_t getTypeIdByName(folly::StringPiece name, List<T, Ts...>) {
   return name == T::name ? T::typeId : getTypeIdByName(name, List<Ts...>());
+}
+
+template <class TypeList>
+inline ssize_t getIndexInListByName(folly::StringPiece name, TypeList);
+
+template <>
+inline ssize_t getIndexInListByName(folly::StringPiece /* name */, List<>) {
+  return -1;
+}
+
+template <class T, class... Ts>
+inline ssize_t getIndexInListByName(folly::StringPiece name, List<T, Ts...>) {
+  return name == T::name
+      ? 0
+      : (getIndexInListByName(name, List<Ts...>()) == -1
+             ? -1
+             : 1 + getIndexInListByName(name, List<Ts...>()));
 }
 
 namespace detail {

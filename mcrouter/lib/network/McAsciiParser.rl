@@ -1,10 +1,8 @@
 /*
  *  Copyright (c) 2015, Facebook, Inc.
- *  All rights reserved.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "mcrouter/lib/network/McAsciiParser.h"
@@ -779,7 +777,7 @@ req_body := (' '+ digit+)? ' '* new_line @{
 write data;
 }%%
 
-void McServerAsciiParser::consumeShutdown(folly::IOBuf& buffer) {
+void McServerAsciiParser::consumeShutdown(folly::IOBuf&) {
   auto& message =
     currentMessage_.get<McShutdownRequest>();
   %%{
@@ -913,7 +911,7 @@ req_body := (' '* delay)? ' '* new_line @{
 write data;
 }%%
 
-void McServerAsciiParser::consumeFlushAll(folly::IOBuf& buffer) {
+void McServerAsciiParser::consumeFlushAll(folly::IOBuf&) {
   auto& message =
     currentMessage_.get<McFlushAllRequest>();
   %%{
@@ -1091,7 +1089,7 @@ command := get | gets | lease_get | metaget | set | add | replace | append |
 write data;
 }%%
 
-void McServerAsciiParser::opTypeConsumer(folly::IOBuf& buffer) {
+void McServerAsciiParser::opTypeConsumer(folly::IOBuf&) {
   %%{
     machine mc_ascii_req_type;
     write init nocs;

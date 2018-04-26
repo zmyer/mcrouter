@@ -1,14 +1,13 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include <memory>
 
+#include <folly/Conv.h>
 #include <folly/Range.h>
 
 #include "mcrouter/CarbonRouterInstanceBase.h"
@@ -23,19 +22,18 @@
 #include "mcrouter/lib/fbi/cpp/util.h"
 #include "mcrouter/lib/network/AccessPoint.h"
 #include "mcrouter/lib/network/gen/MemcacheRouterInfo.h"
+#include "mcrouter/routes/AsynclogRoute.h"
 #include "mcrouter/routes/DestinationRoute.h"
 #include "mcrouter/routes/ExtraRouteHandleProviderIf.h"
 #include "mcrouter/routes/FailoverRoute.h"
 #include "mcrouter/routes/HashRouteFactory.h"
-#include "mcrouter/routes/OutstandingLimitRoute.h"
+#include "mcrouter/routes/PoolRouteUtils.h"
 #include "mcrouter/routes/RateLimitRoute.h"
 #include "mcrouter/routes/RateLimiter.h"
 #include "mcrouter/routes/ShadowRoute.h"
 #include "mcrouter/routes/ShardHashFunc.h"
 #include "mcrouter/routes/ShardSplitRoute.h"
 #include "mcrouter/routes/ShardSplitter.h"
-#include "mcrouter/routes/SlowWarmUpRoute.h"
-#include "mcrouter/routes/SlowWarmUpRouteSettings.h"
 
 namespace facebook {
 namespace memcache {
@@ -58,7 +56,7 @@ McRouteHandleProvider<RouterInfo>::McRouteHandleProvider(
     : proxy_(proxy),
       poolFactory_(poolFactory),
       extraProvider_(buildExtraProvider()),
-      routeMap_(buildRouteMap()) {}
+      routeMap_(buildCheckedRouteMap()) {}
 
 template <class RouterInfo>
 McRouteHandleProvider<RouterInfo>::~McRouteHandleProvider() {
@@ -75,19 +73,17 @@ template <>
 std::unique_ptr<ExtraRouteHandleProviderIf<MemcacheRouterInfo>>
 McRouteHandleProvider<MemcacheRouterInfo>::buildExtraProvider();
 
-// Disable asynclog for other RouterInfos for now.
 template <class RouterInfo>
-std::shared_ptr<typename RouterInfo::RouteHandleIf> McRouteHandleProvider<
-    RouterInfo>::createAsynclogRoute(RouteHandlePtr target, std::string) {
-  LOG(WARNING) << "Asynclog is not supported for that RouterInfo";
-  return std::move(target);
+std::shared_ptr<typename RouterInfo::RouteHandleIf>
+McRouteHandleProvider<RouterInfo>::createAsynclogRoute(
+    RouteHandlePtr target,
+    std::string asynclogName) {
+  if (!proxy_.router().opts().asynclog_disable) {
+    target = makeAsynclogRoute<RouterInfo>(std::move(target), asynclogName);
+  }
+  asyncLogRoutes_.emplace(std::move(asynclogName), target);
+  return target;
 }
-
-template <>
-std::shared_ptr<MemcacheRouteHandleIf>
-McRouteHandleProvider<MemcacheRouterInfo>::createAsynclogRoute(
-    std::shared_ptr<MemcacheRouteHandleIf> target,
-    std::string asynclogName);
 
 template <class RouterInfo>
 const std::vector<std::shared_ptr<typename RouterInfo::RouteHandleIf>>&
@@ -158,7 +154,7 @@ McRouteHandleProvider<RouterInfo>::makePool(
       } else if (equalStr("caret", str, folly::AsciiCaseInsensitive())) {
         protocol = mc_caret_protocol;
       } else if (equalStr("umbrella", str, folly::AsciiCaseInsensitive())) {
-        protocol = mc_umbrella_protocol;
+        protocol = mc_umbrella_protocol_DONOTUSE;
       } else {
         throwLogic("Unknown protocol '{}'", str);
       }
@@ -198,8 +194,20 @@ McRouteHandleProvider<RouterInfo>::makePool(
     }
     // servers
     auto jservers = json.get_ptr("servers");
+    auto jhostnames = json.get_ptr("hostnames");
     checkLogic(jservers, "servers not found");
     checkLogic(jservers->isArray(), "servers is not an array");
+    checkLogic(
+        !jhostnames || jhostnames->isArray(), "hostnames is not an array");
+    checkLogic(
+        !jhostnames || jhostnames->size() == jservers->size(),
+        "hostnames expected to be of the same size as servers, "
+        "expected {}, got {}",
+        jservers->size(),
+        jhostnames ? jhostnames->size() : 0);
+
+    int32_t poolStatIndex = proxy_.router().getStatsEnabledPoolIndex(name);
+
     std::vector<RouteHandlePtr> destinations;
     destinations.reserve(jservers->size());
     for (size_t i = 0; i < jservers->size(); ++i) {
@@ -230,21 +238,32 @@ McRouteHandleProvider<RouterInfo>::makePool(
         }
       }
 
-      accessPoints_[name].push_back(ap);
+      auto it = accessPoints_.find(name);
+      if (it == accessPoints_.end()) {
+        std::vector<std::shared_ptr<const AccessPoint>> accessPoints;
+        it = accessPoints_.emplace(name, std::move(accessPoints)).first;
+      }
+      it->second.push_back(ap);
+      folly::StringPiece nameSp = it->first;
 
       auto pdstn = proxy_.destinationMap()->find(*ap, timeout);
       if (!pdstn) {
         pdstn = proxy_.destinationMap()->emplace(
-            std::move(ap), timeout, qosClass, qosPath);
+            std::move(ap), timeout, qosClass, qosPath, RouterInfo::name);
       }
-      pdstn->updatePoolName(name);
       pdstn->updateShortestTimeout(timeout);
 
       destinations.push_back(makeDestinationRoute<RouterInfo>(
-          std::move(pdstn), name, i, timeout, keepRoutingPrefix));
+          std::move(pdstn),
+          nameSp,
+          i,
+          poolStatIndex,
+          timeout,
+          keepRoutingPrefix));
     } // servers
 
-    return pools_.emplace(name, std::move(destinations)).first->second;
+    return pools_.emplace(std::move(name), std::move(destinations))
+        .first->second;
   } catch (const std::exception& e) {
     throwLogic("Pool {}: {}", name, e.what());
   }
@@ -270,54 +289,23 @@ McRouteHandleProvider<RouterInfo>::makePoolRoute(
   auto destinations = makePool(factory, poolJson);
 
   try {
-    if (json.isObject()) {
-      if (auto maxOutstandingPtr = json.get_ptr("max_outstanding")) {
-        auto v = parseInt(*maxOutstandingPtr, "max_outstanding", 0, 1000000);
-        if (v) {
-          for (auto& destination : destinations) {
-            destination = makeOutstandingLimitRoute<RouterInfo>(
-                std::move(destination), v);
-          }
-        }
-      }
-      if (auto slowWarmUpJson = json.get_ptr("slow_warmup")) {
-        checkLogic(
-            slowWarmUpJson->isObject(), "slow_warmup must be a json object");
-
-        auto failoverTargetJson = slowWarmUpJson->get_ptr("failoverTarget");
-        checkLogic(
-            failoverTargetJson,
-            "couldn't find 'failoverTarget' property in slow_warmup");
-        auto failoverTarget = factory.create(*failoverTargetJson);
-
-        std::shared_ptr<SlowWarmUpRouteSettings> slowWarmUpSettings;
-        if (auto settingsJson = slowWarmUpJson->get_ptr("settings")) {
-          checkLogic(
-              settingsJson->isObject(),
-              "'settings' in slow_warmup must be a json object.");
-          slowWarmUpSettings =
-              std::make_shared<SlowWarmUpRouteSettings>(*settingsJson);
-        } else {
-          slowWarmUpSettings = std::make_shared<SlowWarmUpRouteSettings>();
-        }
-
-        for (size_t i = 0; i < destinations.size(); ++i) {
-          destinations[i] = makeSlowWarmUpRoute<RouterInfo>(
-              std::move(destinations[i]), failoverTarget, slowWarmUpSettings);
-        }
-      }
-
-      if (json.count("shadows")) {
-        destinations = makeShadowRoutes(
-            factory, json, std::move(destinations), proxy_, *extraProvider_);
-      }
-    }
+    destinations = wrapPoolDestinations<RouterInfo>(
+        factory,
+        std::move(destinations),
+        poolJson.name,
+        json,
+        proxy_,
+        *extraProvider_);
 
     // add weights and override whatever we have in PoolRoute::hash
     folly::dynamic jhashWithWeights = folly::dynamic::object();
     if (auto jWeights = poolJson.json.get_ptr("weights")) {
       jhashWithWeights = folly::dynamic::object(
           "hash_func", WeightedCh3HashFunc::type())("weights", *jWeights);
+    }
+
+    if (auto jTags = poolJson.json.get_ptr("tags")) {
+      jhashWithWeights["tags"] = *jTags;
     }
 
     if (json.isObject()) {
@@ -370,6 +358,32 @@ McRouteHandleProvider<RouterInfo>::buildRouteMap() {
   return RouterInfo::buildRouteMap();
 }
 
+template <class RouterInfo>
+typename McRouteHandleProvider<RouterInfo>::RouteHandleFactoryMap
+McRouteHandleProvider<RouterInfo>::buildCheckedRouteMap() {
+  typename McRouteHandleProvider<RouterInfo>::RouteHandleFactoryMap
+      checkedRouteMap;
+
+  // Wrap all factory functions with a nullptr check. Note that there are still
+  // other code paths that could lead to a nullptr being returned from a
+  // route handle factory function, e.g., in makeShadow() and makeFailover()
+  // extra provider functions. So those code paths must be checked by other
+  // means.
+  for (auto it : buildRouteMap()) {
+    checkedRouteMap.emplace(it.first, [
+      factoryFunc = std::move(it.second),
+      rhName = it.first
+    ](RouteHandleFactory<RouteHandleIf> & factory, const folly::dynamic& json) {
+      auto rh = factoryFunc(factory, json);
+      checkLogic(
+          rh != nullptr, folly::sformat("make{} returned nullptr", rhName));
+      return rh;
+    });
+  }
+
+  return checkedRouteMap;
+}
+
 // TODO(@aap): Remove this override as soon as all route handles are migrated
 template <>
 typename McRouteHandleProvider<MemcacheRouterInfo>::RouteHandleFactoryMap
@@ -405,6 +419,12 @@ McRouteHandleProvider<RouterInfo>::create(
   throwLogic("Unknown RouteHandle: {}", type);
 }
 
-} // mcrouter
-} // memcache
-} // facebook
+template <class RouterInfo>
+const folly::dynamic& McRouteHandleProvider<RouterInfo>::parsePool(
+    const folly::dynamic& json) {
+  return poolFactory_.parsePool(json).json;
+}
+
+} // namespace mcrouter
+} // namespace memcache
+} // namespace facebook

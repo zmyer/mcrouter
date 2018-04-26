@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2017-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -12,12 +10,12 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
-#include <folly/Memory.h>
 #include <folly/Random.h>
 
-#include <mcrouter/lib/CacheClientStats.h>
+#include "mcrouter/lib/CacheClientStats.h"
 #include "mcrouter/lib/carbon/connection/CarbonConnectionUtil.h"
 
 namespace carbon {
@@ -77,10 +75,10 @@ class PooledCarbonConnectionImpl {
   template <class Impl>
   std::unique_ptr<If> recreate() {
     std::vector<std::unique_ptr<If>> newConnections;
-    for (auto i = 0; i < connections_.size(); ++i) {
+    for (size_t i = 0; i < connections_.size(); ++i) {
       newConnections.push_back(connections_[i]->recreate());
     }
-    return folly::make_unique<Impl>(
+    return std::make_unique<Impl>(
         std::move(newConnections), splitBatchedRequests_);
   }
 

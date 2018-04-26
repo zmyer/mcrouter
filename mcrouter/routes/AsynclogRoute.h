@@ -1,18 +1,20 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
+
+#include <utility>
 
 #include "mcrouter/McrouterFiberContext.h"
 #include "mcrouter/lib/Operation.h"
 #include "mcrouter/lib/RouteHandleTraverser.h"
 #include "mcrouter/lib/carbon/RoutingGroups.h"
+#include "mcrouter/lib/config/RouteHandleBuilder.h"
+#include "mcrouter/lib/network/gen/MemcacheMessages.h"
 
 namespace facebook {
 namespace memcache {
@@ -42,9 +44,7 @@ class AsynclogRoute {
     t(*rh_, req);
   }
 
-  template <class Request>
-  ReplyT<Request> route(const Request& req, carbon::DeleteLikeT<Request> = 0)
-      const {
+  memcache::McDeleteReply route(const memcache::McDeleteRequest& req) const {
     return fiber_local<RouterInfo>::runWithLocals([this, &req]() {
       fiber_local<RouterInfo>::setAsynclogName(asynclogName_);
       return rh_->route(req);
@@ -52,9 +52,7 @@ class AsynclogRoute {
   }
 
   template <class Request>
-  ReplyT<Request> route(
-      const Request& req,
-      carbon::OtherThanT<Request, carbon::DeleteLike<>> = 0) const {
+  ReplyT<Request> route(const Request& req) const {
     return rh_->route(req);
   }
 
@@ -62,6 +60,15 @@ class AsynclogRoute {
   const std::shared_ptr<RouteHandleIf> rh_;
   const std::string asynclogName_;
 };
+
+template <class RouterInfo>
+typename RouterInfo::RouteHandlePtr makeAsynclogRoute(
+    typename RouterInfo::RouteHandlePtr rh,
+    std::string asynclogName) {
+  return makeRouteHandleWithInfo<RouterInfo, AsynclogRoute>(
+      std::move(rh), std::move(asynclogName));
+}
+
 } // mcrouter
 } // memcache
 } // facebook

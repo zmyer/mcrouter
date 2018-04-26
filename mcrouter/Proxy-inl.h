@@ -1,12 +1,11 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2015-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
+#include <folly/Range.h>
 #include <folly/fibers/EventBaseLoopController.h>
 
 #include "mcrouter/McrouterFiberContext.h"
@@ -28,25 +27,21 @@ class ProxyConfig;
 
 namespace detail {
 
-// TODO(@aap): Make ServceInfo work with something other than
-//             MemcacheRouterInfo/McGetRequest
+template <class RouterInfo>
 bool processGetServiceInfoRequest(
     const McGetRequest& req,
-    std::shared_ptr<ProxyRequestContextTyped<McrouterRouterInfo, McGetRequest>>&
-        ctx);
+    std::shared_ptr<ProxyRequestContextTyped<RouterInfo, McGetRequest>>& ctx) {
+  constexpr folly::StringPiece kInternalGetPrefix("__mcrouter__.");
 
-template <class RouterInfo, class Request>
-bool processGetServiceInfoRequest(
-    const Request&,
-    std::shared_ptr<ProxyRequestContextTyped<RouterInfo, Request>>&) {
-  return false;
+  if (!req.key().fullKey().startsWith(kInternalGetPrefix)) {
+    return false;
+  }
+  auto& config = ctx->proxyConfig();
+  auto key = req.key().fullKey();
+  key.advance(kInternalGetPrefix.size());
+  config.serviceInfo()->handleRequest(key, ctx);
+  return true;
 }
-
-template <class RouterInfo, class GetRequest>
-bool processGetServiceInfoRequestImpl(
-    const GetRequest& req,
-    std::shared_ptr<ProxyRequestContextTyped<RouterInfo, GetRequest>>& ctx,
-    carbon::GetLikeT<GetRequest> = 0);
 
 } // detail
 
@@ -79,25 +74,17 @@ void Proxy<RouterInfo>::WaitingRequest<Request>::process(
 
 template <class RouterInfo>
 template <class Request>
-typename std::enable_if<
-    ListContains<typename RouterInfo::RoutableRequests, Request>::value,
-    void>::type
-Proxy<RouterInfo>::routeHandlesProcessRequest(
+typename std::enable_if_t<
+    ListContains<typename RouterInfo::RoutableRequests, Request>::value>
+Proxy<RouterInfo>::addRouteTask(
     const Request& req,
-    std::unique_ptr<ProxyRequestContextTyped<RouterInfo, Request>> uctx) {
+    std::shared_ptr<ProxyRequestContextTyped<RouterInfo, Request>> sharedCtx) {
   requestStats_.template bump<Request>(carbon::RouterStatTypes::Incoming);
-
-  auto sharedCtx = ProxyRequestContextTyped<RouterInfo, Request>::process(
-      std::move(uctx), getConfigUnsafe());
-
-  if (detail::processGetServiceInfoRequest(req, sharedCtx)) {
-    return;
-  }
 
   auto funcCtx = sharedCtx;
 
   fiberManager().addTaskFinally(
-      [&req, ctx = std::move(funcCtx) ]() mutable {
+      [&req, ctx = std::move(funcCtx)]() mutable {
         try {
           auto& proute = ctx->proxyRoute();
           fiber_local<RouterInfo>::setSharedCtx(std::move(ctx));
@@ -113,19 +100,18 @@ Proxy<RouterInfo>::routeHandlesProcessRequest(
           return reply;
         }
       },
-      [ctx = std::move(sharedCtx)](folly::Try<ReplyT<Request>> && reply) {
+      [ctx = std::move(sharedCtx)](folly::Try<ReplyT<Request>>&& reply) {
         ctx->sendReply(std::move(*reply));
       });
 }
 
 template <class RouterInfo>
 template <class Request>
-typename std::enable_if<
-    !ListContains<typename RouterInfo::RoutableRequests, Request>::value,
-    void>::type
-Proxy<RouterInfo>::routeHandlesProcessRequest(
+typename std::enable_if_t<
+    !ListContains<typename RouterInfo::RoutableRequests, Request>::value>
+Proxy<RouterInfo>::addRouteTask(
     const Request&,
-    std::unique_ptr<ProxyRequestContextTyped<RouterInfo, Request>> uctx) {
+    std::shared_ptr<ProxyRequestContextTyped<RouterInfo, Request>> sharedCtx) {
   ReplyT<Request> reply(mc_res_local_error);
   carbon::setMessageIfPresent(
       reply,
@@ -134,7 +120,18 @@ Proxy<RouterInfo>::routeHandlesProcessRequest(
           "because the operation is not supported by RouteHandles "
           "library!",
           typeid(Request).name()));
-  uctx->sendReply(std::move(reply));
+  sharedCtx->sendReply(std::move(reply));
+}
+
+template <class RouterInfo>
+template <class Request>
+void Proxy<RouterInfo>::routeHandlesProcessRequest(
+    const Request& req,
+    std::unique_ptr<ProxyRequestContextTyped<RouterInfo, Request>> uctx) {
+  auto sharedCtx = ProxyRequestContextTyped<RouterInfo, Request>::process(
+      std::move(uctx), getConfigUnsafe());
+
+  addRouteTask(req, std::move(sharedCtx));
 }
 
 template <class RouterInfo>
@@ -166,7 +163,7 @@ void Proxy<RouterInfo>::dispatchRequest(
       return;
     }
     auto& queue = waitingRequests_[static_cast<int>(ctx->priority())];
-    auto w = folly::make_unique<WaitingRequest<Request>>(req, std::move(ctx));
+    auto w = std::make_unique<WaitingRequest<Request>>(req, std::move(ctx));
     // Only enable timeout on waitingRequests_ queue when queue throttling is
     // enabled
     if (getRouterOptions().proxy_max_inflight_requests > 0 &&
@@ -186,9 +183,9 @@ template <class RouterInfo>
 Proxy<RouterInfo>::Proxy(
     CarbonRouterInstanceBase& rtr,
     size_t id,
-    folly::EventBase& evb)
+    folly::VirtualEventBase& evb)
     : ProxyBase(rtr, id, evb, RouterInfo()) {
-  messageQueue_ = folly::make_unique<MessageQueue<ProxyMessage>>(
+  messageQueue_ = std::make_unique<MessageQueue<ProxyMessage>>(
       router().opts().client_queue_size,
       [this](ProxyMessage&& message) {
         this->messageReady(message.type, message.data);
@@ -196,35 +193,57 @@ Proxy<RouterInfo>::Proxy(
       router().opts().client_queue_no_notify_rate,
       router().opts().client_queue_wait_threshold_us,
       &nowUs,
-      [this]() { stats().incrementSafe(client_queue_notifications_stat); });
+      [this]() { stats().incrementSafe(client_queue_notifications_stat); },
+      [this, noFlushLoops = 0](bool last) mutable {
+        bool haveTasks = fiberManager().runQueueSize() != 0;
+        if (!last) {
+          // If we have tasks in fiber manager, or we have pending flushes, then
+          // we can guarantee that we won't block event loop.
+          return haveTasks || !flushList().empty();
+        }
+        if (!flushList().empty() &&
+            (!haveTasks ||
+             ++noFlushLoops >= router().opts().max_no_flush_event_loops)) {
+          noFlushLoops = 0;
+          flushCallback_.setList(std::move(flushList()));
+          eventBase().getEventBase().runInLoop(
+              &flushCallback_, true /* thisIteration */);
+        }
+        return false;
+      });
 }
 
 template <class RouterInfo>
-typename Proxy<RouterInfo>::Pointer Proxy<RouterInfo>::createProxy(
+Proxy<RouterInfo>* Proxy<RouterInfo>::createProxy(
     CarbonRouterInstanceBase& router,
-    folly::EventBase& eventBase,
+    folly::VirtualEventBase& eventBase,
     size_t id) {
-  /* This hack is needed to make sure Proxy stays alive
-     until at least event base managed to run the callback below */
-  auto proxy = std::shared_ptr<Proxy>(new Proxy(router, id, eventBase));
-  proxy->self_ = proxy;
+  auto proxy = std::unique_ptr<Proxy>(new Proxy(router, id, eventBase));
+  auto proxyPtr = proxy.get();
 
-  eventBase.runInEventBaseThread([proxy, &eventBase]() {
-    proxy->messageQueue_->attachEventBase(eventBase);
+  eventBase.runInEventBaseThread([proxyPtr, &eventBase]() {
+    proxyPtr->messageQueue_->attachEventBase(eventBase);
 
     dynamic_cast<folly::fibers::EventBaseLoopController&>(
-        proxy->fiberManager().loopController())
+        proxyPtr->fiberManager().loopController())
         .attachEventBase(eventBase);
 
     std::chrono::milliseconds connectionResetInterval{
-        proxy->router().opts().reset_inactive_connection_interval};
+        proxyPtr->router().opts().reset_inactive_connection_interval};
 
     if (connectionResetInterval.count() > 0) {
-      proxy->destinationMap()->setResetTimer(connectionResetInterval);
+      proxyPtr->destinationMap()->setResetTimer(connectionResetInterval);
     }
   });
 
-  return Pointer(proxy.get());
+  // We want proxy life-time to be tied to VirtualEventBase.
+  eventBase.runOnDestruction(new folly::EventBase::FunctionLoopCallback(
+      [proxy = std::move(proxy)]() mutable {
+        /* make sure proxy is deleted on the proxy thread */
+        proxy.reset();
+      }));
+
+  return proxyPtr;
 }
 
 template <class RouterInfo>
@@ -305,7 +324,15 @@ template <class RouterInfo>
 void Proxy<RouterInfo>::routeHandlesProcessRequest(
     const McStatsRequest& req,
     std::unique_ptr<ProxyRequestContextTyped<RouterInfo, McStatsRequest>> ctx) {
-  ctx->sendReply(stats_reply(this, req.key().fullKey()));
+  McStatsReply reply;
+  try {
+    reply = stats_reply(this, req.key().fullKey());
+  } catch (const std::exception& e) {
+    reply.result() = mc_res_local_error;
+    reply.message() =
+        folly::to<std::string>("Error processing stats request: ", e.what());
+  }
+  ctx->sendReply(std::move(reply));
 }
 
 template <class RouterInfo>
@@ -317,6 +344,20 @@ void Proxy<RouterInfo>::routeHandlesProcessRequest(
   reply.value() =
       folly::IOBuf(folly::IOBuf::COPY_BUFFER, MCROUTER_PACKAGE_STRING);
   ctx->sendReply(std::move(reply));
+}
+
+template <class RouterInfo>
+void Proxy<RouterInfo>::routeHandlesProcessRequest(
+    const McGetRequest& req,
+    std::unique_ptr<ProxyRequestContextTyped<RouterInfo, McGetRequest>> uctx) {
+  auto sharedCtx = ProxyRequestContextTyped<RouterInfo, McGetRequest>::process(
+      std::move(uctx), getConfigUnsafe());
+
+  if (detail::processGetServiceInfoRequest(req, sharedCtx)) {
+    return;
+  }
+
+  addRouteTask(req, std::move(sharedCtx));
 }
 
 template <class RouterInfo>
@@ -352,8 +393,7 @@ void proxy_config_swap(
 template <class RouterInfo>
 template <class Request>
 typename std::enable_if<TNotRateLimited<Request>::value, bool>::type
-Proxy<RouterInfo>::rateLimited(ProxyRequestPriority priority, const Request&)
-    const {
+Proxy<RouterInfo>::rateLimited(ProxyRequestPriority, const Request&) const {
   return false;
 }
 

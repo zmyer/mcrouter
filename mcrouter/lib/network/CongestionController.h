@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -25,17 +23,33 @@ namespace facebook {
 namespace memcache {
 
 struct CongestionControllerOptions {
-  // The target value to the controller of CPU utilization
-  uint64_t cpuControlTarget{0};
+  /**
+   * How frequently we should collect data.
+   * 0 to disable collecting data completely.
+   */
+  std::chrono::milliseconds dataCollectionInterval{0};
 
-  // The update delay of drop probability for CPU util controller
-  std::chrono::milliseconds cpuControlDelay{0};
+  /**
+   * Whether to enable sending server load back to clients.
+   */
+  bool enableServerLoad{false};
 
-  // The target value to the controller of memory utilization, in KB
-  uint64_t memControlTarget{0};
+  /**
+   * The target value to the controller. This value is used to calculate
+   * drop probability.
+   * 0 to disable drop probability calculation.
+   */
+  uint64_t target{0};
 
-  // The update delay of drop probability for memory util controller
-  std::chrono::milliseconds memControlDelay{0};
+  /**
+   * The update delay of drop probability.
+   */
+  std::chrono::milliseconds delay{100};
+
+  bool shouldEnable() const noexcept {
+    return dataCollectionInterval.count() > 0 &&
+        (enableServerLoad || (target > 0 && delay >= dataCollectionInterval));
+  }
 };
 
 /**
@@ -50,8 +64,7 @@ class CongestionController
     : public std::enable_shared_from_this<CongestionController> {
  public:
   CongestionController(
-      uint64_t target,
-      std::chrono::milliseconds delay,
+      const CongestionControllerOptions& opts,
       folly::EventBase& evb,
       size_t queueCapacity);
 

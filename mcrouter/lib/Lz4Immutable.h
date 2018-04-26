@@ -1,15 +1,15 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
 
 #include <folly/io/IOBuf.h>
+
+#include "mcrouter/lib/IovecCursor.h"
 
 namespace facebook {
 namespace memcache {
@@ -55,6 +55,25 @@ class Lz4Immutable {
   size_t compressBound(size_t size) const noexcept;
 
   /**
+   * Compress data into the given buffer.
+   *
+   * @param iov       Array of iovec describing the input data.
+   * @param iovcnt    Number of elements in 'iov'.
+   * @param dest      Destination buffer to compress into.
+   * @param destSize  Size of 'dest'. Should be large enough to hold the
+   *                  compressed data or compression will fail.
+   * @return          Size of the compressed data written to 'dest'.
+   *
+   * @throw std::invalid_argument   If the input is too large to be compressed
+   *                                or the destination buffer is too small.
+   */
+  size_t compressInto(
+      const struct iovec* iov,
+      size_t iovcnt,
+      void* dest,
+      size_t destSize) const;
+
+  /**
    * Compress the data.
    *
    * @param source  Data to compress.
@@ -83,7 +102,20 @@ class Lz4Immutable {
       size_t iovcnt,
       size_t uncompressedSize) const noexcept;
 
+  // Read-only access to the immutable dictionary.
+  const folly::IOBuf& dictionary() const {
+    return *state_.dictionary;
+  }
+
  private:
+  // Compress 'source' into 'output' which has space for 'maxOutputSize' bytes.
+  // NOTE: the caller must guarantee 'source' is not too large and
+  // 'maxOutputSize' is large enough.
+  size_t compressCommon(
+      IovecCursor source,
+      uint8_t* output,
+      size_t maxOutputSize) const;
+
   const Lz4ImmutableState state_;
 };
 

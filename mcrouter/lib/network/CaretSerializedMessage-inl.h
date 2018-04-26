@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2015-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "mcrouter/lib/network/CarbonMessageDispatcher.h"
@@ -24,7 +22,7 @@ bool CaretSerializedMessage::prepare(
       req,
       reqId,
       Request::typeId,
-      req.traceId(),
+      req.traceToInts(),
       supportedCodecs,
       iovOut,
       niovOut);
@@ -37,16 +35,18 @@ bool CaretSerializedMessage::prepare(
     const CodecIdRange& supportedCodecs,
     const CompressionCodecMap* compressionCodecMap,
     double dropProbability,
+    ServerLoad serverLoad,
     const struct iovec*& iovOut,
     size_t& niovOut) noexcept {
   return fill(
       reply,
       reqId,
       Reply::typeId,
-      0 /* traceId */,
+      {0, 0} /* traceId */,
       supportedCodecs,
       compressionCodecMap,
       dropProbability,
+      serverLoad,
       iovOut,
       niovOut);
 }
@@ -56,7 +56,7 @@ bool CaretSerializedMessage::fill(
     const Message& message,
     uint32_t reqId,
     size_t typeId,
-    uint64_t traceId,
+    std::pair<uint64_t, uint64_t> traceId,
     const CodecIdRange& supportedCodecs,
     const struct iovec*& iovOut,
     size_t& niovOut) {
@@ -69,9 +69,12 @@ bool CaretSerializedMessage::fill(
   }
 
   UmbrellaMessageInfo info;
-  info.supportedCodecsFirstId = supportedCodecs.firstId;
-  info.supportedCodecsSize = supportedCodecs.size;
-  fillImpl(info, reqId, typeId, traceId, 0.0, iovOut, niovOut);
+  if (!supportedCodecs.isEmpty()) {
+    info.supportedCodecsFirstId = supportedCodecs.firstId;
+    info.supportedCodecsSize = supportedCodecs.size;
+  }
+  fillImpl(
+      info, reqId, typeId, traceId, 0.0, ServerLoad::zero(), iovOut, niovOut);
   return true;
 }
 
@@ -80,10 +83,11 @@ bool CaretSerializedMessage::fill(
     const Message& message,
     uint32_t reqId,
     size_t typeId,
-    uint64_t traceId,
+    std::pair<uint64_t, uint64_t> traceId,
     const CodecIdRange& supportedCodecs,
     const CompressionCodecMap* compressionCodecMap,
     double dropProbability,
+    ServerLoad serverLoad,
     const struct iovec*& iovOut,
     size_t& niovOut) {
   // Serialize and (maybe) compress body of message.
@@ -107,7 +111,15 @@ bool CaretSerializedMessage::fill(
     info.uncompressedBodySize = uncompressedSize;
   }
 
-  fillImpl(info, reqId, typeId, traceId, dropProbability, iovOut, niovOut);
+  fillImpl(
+      info,
+      reqId,
+      typeId,
+      traceId,
+      dropProbability,
+      serverLoad,
+      iovOut,
+      niovOut);
   return true;
 }
 
@@ -126,8 +138,7 @@ inline bool CaretSerializedMessage::maybeCompress(
   static constexpr size_t kCompressionOverhead = 4;
   try {
     const auto iovs = storage_.getIovecs();
-    // The first iovec is the header - we need to compress just the data.
-    auto compressedBuf = codec->compress(iovs.first + 1, iovs.second - 1);
+    auto compressedBuf = codec->compress(iovs.first, iovs.second);
     auto compressedSize = compressedBuf->computeChainDataLength();
     if ((compressedSize + kCompressionOverhead) < uncompressedSize) {
       storage_.reset();
@@ -145,8 +156,9 @@ inline void CaretSerializedMessage::fillImpl(
     UmbrellaMessageInfo& info,
     uint32_t reqId,
     size_t typeId,
-    uint64_t traceId,
+    std::pair<uint64_t, uint64_t> traceId,
     double dropProbability,
+    ServerLoad serverLoad,
     const struct iovec*& iovOut,
     size_t& niovOut) {
   info.bodySize = storage_.computeBodySize();
@@ -156,6 +168,7 @@ inline void CaretSerializedMessage::fillImpl(
   info.traceId = traceId;
   info.dropProbability =
       static_cast<uint64_t>(dropProbability * kDropProbabilityNormalizer);
+  info.serverLoad = serverLoad;
 
   size_t headerSize = caretPrepareHeader(
       info, reinterpret_cast<char*>(storage_.getHeaderBuf()));
@@ -165,5 +178,6 @@ inline void CaretSerializedMessage::fillImpl(
   iovOut = iovs.first;
   niovOut = iovs.second;
 }
-}
-} // facebook::memcache
+
+} // memcache
+} // facebook

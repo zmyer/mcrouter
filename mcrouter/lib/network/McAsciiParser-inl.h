@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2015-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include <arpa/inet.h>
@@ -41,13 +39,13 @@ class CallbackWrapper<Callback, List<Request>>
  public:
   explicit CallbackWrapper(Callback& callback) : callback_(callback) {}
 
-  void multiOpEnd() noexcept override final {
+  void multiOpEnd() noexcept final {
     callback_.multiOpEnd();
   }
 
   using CallbackBase<McRequestList>::onRequest;
 
-  void onRequest(Request&& req, bool noreply = false) noexcept override final {
+  void onRequest(Request&& req, bool noreply = false) noexcept final {
     callback_.onRequest(std::move(req), noreply);
   }
 
@@ -64,7 +62,7 @@ class CallbackWrapper<Callback, List<Request, Requests...>>
 
   using CallbackWrapper<Callback, List<Requests...>>::onRequest;
 
-  void onRequest(Request&& req, bool noreply = false) noexcept override final {
+  void onRequest(Request&& req, bool noreply = false) noexcept final {
     this->callback_.onRequest(std::move(req), noreply);
   }
 };
@@ -175,7 +173,7 @@ inline void McAsciiParserBase::trimIOBufToRange(
 template <class Callback>
 McServerAsciiParser::McServerAsciiParser(Callback& callback)
     : callback_(
-          folly::make_unique<detail::CallbackWrapper<Callback, McRequestList>>(
+          std::make_unique<detail::CallbackWrapper<Callback, McRequestList>>(
               callback)) {}
 
 template <class Reply>
@@ -193,7 +191,7 @@ void McClientAsciiParser::consumeVersion(const folly::IOBuf& buffer) {
 }
 
 template <class Reply>
-void McClientAsciiParser::consumeIpAddr(const folly::IOBuf& buffer) {
+void McClientAsciiParser::consumeIpAddr(const folly::IOBuf& /* buffer */) {
   auto& message = currentMessage_.get<Reply>();
   char inAddrBuf[sizeof(struct in6_addr)];
   // Max ip address length is INET6_ADDRSTRLEN - 1 chars.

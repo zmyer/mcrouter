@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2015-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "ClientSocket.h"
@@ -97,7 +95,7 @@ void ClientSocket::write(
   }
 
   checkRuntime(
-      n == data.size(),
+      static_cast<size_t>(n) == data.size(),
       "failed to write to socket. Written {}, expected {}",
       n,
       data.size());
@@ -128,7 +126,7 @@ std::string ClientSocket::sendRequest(
     throwRuntime("peer closed the socket");
   }
   checkRuntime(
-      n == replySize,
+      static_cast<size_t>(n) == replySize,
       "failed to read from socket. Read {}, expected {}",
       n,
       replySize);
@@ -158,9 +156,10 @@ std::string ClientSocket::sendRequest(
     throwRuntime("failed to read from socket: {}", folly::errnoStr(errno));
   }
   checkRuntime(
-      n < maxReplySize,
+      static_cast<size_t>(n) < maxReplySize,
       "the reply buffer may be too small because we used it up");
   return std::string(replyBuf.data(), n);
 }
-}
-} // facebook::memcache
+
+} // memcache
+} // facebook

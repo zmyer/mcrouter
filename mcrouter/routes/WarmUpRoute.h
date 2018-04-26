@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -91,7 +89,7 @@ class WarmUpRoute {
 
     /* else */
     auto warmReply = warm_->route(req);
-    uint32_t exptime;
+    uint32_t exptime = 0;
     if (isHitResult(warmReply.result()) && getExptimeForCold(req, exptime)) {
       folly::fibers::addTask([
         cold = cold_,
@@ -122,7 +120,7 @@ class WarmUpRoute {
     // miss with lease token from cold route: send simple get to warm route
     McGetRequest reqOpGet(req.key().fullKey());
     auto warmReply = warm_->route(reqOpGet);
-    uint32_t exptime;
+    uint32_t exptime = 0;
     if (isHitResult(warmReply.result()) &&
         getExptimeForCold(reqOpGet, exptime)) {
       // update cold route with lease set
@@ -151,7 +149,7 @@ class WarmUpRoute {
     // miss: send simple get to warm route
     McGetRequest reqGet(req.key().fullKey());
     auto warmReply = warm_->route(reqGet);
-    uint32_t exptime;
+    uint32_t exptime = 0;
     if (isHitResult(warmReply.result()) && getExptimeForCold(req, exptime)) {
       // update cold route if we have the value
       auto addReq = coldUpdateFromWarm<McAddRequest>(req, warmReply, exptime);

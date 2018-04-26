@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "McRouteHandleProvider.h"
@@ -17,15 +15,20 @@
 #include "mcrouter/routes/AllMajorityRouteFactory.h"
 #include "mcrouter/routes/AllSyncRouteFactory.h"
 #include "mcrouter/routes/DevNullRoute.h"
-#include "mcrouter/routes/ErrorRouteFactory.h"
+#include "mcrouter/routes/ErrorRoute.h"
 #include "mcrouter/routes/FailoverRoute.h"
+#include "mcrouter/routes/FailoverWithExptimeRouteFactory.h"
 #include "mcrouter/routes/HashRouteFactory.h"
 #include "mcrouter/routes/HostIdRouteFactory.h"
 #include "mcrouter/routes/L1L2CacheRouteFactory.h"
+#include "mcrouter/routes/L1L2SizeSplitRoute.h"
 #include "mcrouter/routes/LatestRoute.h"
+#include "mcrouter/routes/LoadBalancerRoute.h"
 #include "mcrouter/routes/LoggingRoute.h"
+#include "mcrouter/routes/McExtraRouteHandleProvider.h"
 #include "mcrouter/routes/MigrateRouteFactory.h"
 #include "mcrouter/routes/MissFailoverRoute.h"
+#include "mcrouter/routes/ModifyExptimeRoute.h"
 #include "mcrouter/routes/ModifyKeyRoute.h"
 #include "mcrouter/routes/OperationSelectorRoute.h"
 #include "mcrouter/routes/OutstandingLimitRoute.h"
@@ -38,43 +41,14 @@ namespace mcrouter {
 
 using McRouteHandleFactory = RouteHandleFactory<McrouterRouteHandleIf>;
 
-
-McrouterRouteHandlePtr makeFailoverWithExptimeRoute(
-    McRouteHandleFactory& factory,
-    const folly::dynamic& json);
-
-McrouterRouteHandlePtr makeModifyExptimeRoute(
-    McRouteHandleFactory& factory,
-    const folly::dynamic& json);
-
 McrouterRouteHandlePtr makeWarmUpRoute(
     McRouteHandleFactory& factory,
     const folly::dynamic& json);
 
-McrouterRouteHandlePtr makeAsynclogRoute(
-    McrouterRouteHandlePtr rh,
-    std::string asynclogName);
-
-std::pair<McrouterRouteHandlePtr, std::string> parseAsynclogRoute(
-    RouteHandleFactory<McrouterRouteHandleIf>& factory,
-    const folly::dynamic& json);
-
-template <>
-std::shared_ptr<MemcacheRouteHandleIf>
-McRouteHandleProvider<MemcacheRouterInfo>::createAsynclogRoute(
-    std::shared_ptr<MemcacheRouteHandleIf> target,
-    std::string asynclogName) {
-  if (!proxy_.router().opts().asynclog_disable) {
-    target = makeAsynclogRoute(std::move(target), asynclogName);
-  }
-  asyncLogRoutes_.emplace(std::move(asynclogName), target);
-  return target;
-}
-
 template <>
 std::unique_ptr<ExtraRouteHandleProviderIf<MemcacheRouterInfo>>
 McRouteHandleProvider<MemcacheRouterInfo>::buildExtraProvider() {
-  return createExtraRouteHandleProvider();
+  return std::make_unique<McExtraRouteHandleProvider<MemcacheRouterInfo>>();
 }
 
 template <>
@@ -86,28 +60,24 @@ McRouteHandleProvider<MemcacheRouterInfo>::buildRouteMap() {
       {"AllInitialRoute", &makeAllInitialRoute<MemcacheRouterInfo>},
       {"AllMajorityRoute", &makeAllMajorityRoute<MemcacheRouterInfo>},
       {"AllSyncRoute", &makeAllSyncRoute<MemcacheRouterInfo>},
-      {"AsynclogRoute",
-       [this](
-           RouteHandleFactory<MemcacheRouteHandleIf>& factory,
-           const folly::dynamic& json) {
-         auto p = parseAsynclogRoute(factory, json);
-         return createAsynclogRoute(std::move(p.first), std::move(p.second));
-       }},
       {"DevNullRoute", &makeDevNullRoute<MemcacheRouterInfo>},
       {"ErrorRoute", &makeErrorRoute<MemcacheRouterInfo>},
-      {"FailoverWithExptimeRoute", &makeFailoverWithExptimeRoute},
+      {"FailoverWithExptimeRoute",
+       &makeFailoverWithExptimeRoute<MemcacheRouterInfo>},
       {"HashRoute",
        [](McRouteHandleFactory& factory, const folly::dynamic& json) {
          return makeHashRoute<McrouterRouterInfo>(factory, json);
        }},
       {"HostIdRoute", &makeHostIdRoute<MemcacheRouterInfo>},
       {"L1L2CacheRoute", &makeL1L2CacheRoute<MemcacheRouterInfo>},
+      {"L1L2SizeSplitRoute", &makeL1L2SizeSplitRoute},
       {"LatestRoute", &makeLatestRoute<MemcacheRouterInfo>},
+      {"LoadBalancerRoute", &makeLoadBalancerRoute<MemcacheRouterInfo>},
       {"LoggingRoute", &makeLoggingRoute<MemcacheRouterInfo>},
       {"MigrateRoute", &makeMigrateRoute<MemcacheRouterInfo>},
       {"MissFailoverRoute", &makeMissFailoverRoute<MemcacheRouterInfo>},
-      {"ModifyExptimeRoute", &makeModifyExptimeRoute},
       {"ModifyKeyRoute", &makeModifyKeyRoute<MemcacheRouterInfo>},
+      {"ModifyExptimeRoute", &makeModifyExptimeRoute<MemcacheRouterInfo>},
       {"NullRoute", &makeNullRoute<MemcacheRouteHandleIf>},
       {"OperationSelectorRoute",
        &makeOperationSelectorRoute<MemcacheRouterInfo>},

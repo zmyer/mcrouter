@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -23,13 +21,9 @@ namespace mcrouter {
 
 class CarbonRouterInstanceBase;
 
-template <class RouterInfo>
-class Proxy;
-
-template <class RouterInfo>
 class ProxyThread {
  public:
-  ProxyThread(CarbonRouterInstanceBase& router, size_t id);
+  ProxyThread(const CarbonRouterInstanceBase& router, size_t id);
 
   /**
    * Stops the underlying proxy thread and joins it.
@@ -39,31 +33,10 @@ class ProxyThread {
    */
   void stopAndJoin() noexcept;
 
-  /**
-   * Spawns a new proxy thread for execution. Should be called at most once.
-   *
-   * @throws std::system_error  If failed to spawn thread
-   */
-  void spawn();
-
-  Proxy<RouterInfo>& proxy() {
-    return proxyRef_;
-  }
-  folly::EventBase& eventBase() {
-    return evbRef_;
-  }
+  folly::EventBase& getEventBase() const;
 
  private:
-  std::unique_ptr<folly::EventBase> evb_;
-  typename Proxy<RouterInfo>::Pointer proxy_;
-  folly::EventBase& evbRef_;
-  Proxy<RouterInfo>& proxyRef_;
-  std::thread thread_;
-
-  void stopAwriterThreads();
-  static void proxyThreadRun(
-      std::unique_ptr<folly::EventBase> evb,
-      typename Proxy<RouterInfo>::Pointer proxy);
+  folly::EventBaseThread thread_;
 };
 }
 }

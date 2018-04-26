@@ -1,13 +1,13 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2015-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
+
+#include <utility>
 
 #include <folly/Range.h>
 #include <folly/Varint.h>
@@ -15,6 +15,7 @@
 #include "mcrouter/lib/Compression.h"
 #include "mcrouter/lib/CompressionCodecManager.h"
 #include "mcrouter/lib/carbon/CarbonQueueAppender.h"
+#include "mcrouter/lib/network/ServerLoad.h"
 #include "mcrouter/lib/network/UmbrellaProtocol.h"
 
 namespace facebook {
@@ -61,13 +62,15 @@ class CaretSerializedMessage {
   /**
    * Prepare replies for serialization
    *
-   * @param  reply                TypedReply.
-   * @param  reqId                Request id.
-   * @param  supportedCodecs      Range of supported codecs.
-   * @param  compressionCodecMap  Map of available codecs.
-   * @param  iovOut               Will be set to the beginning of
-   *                              array of iovecs.
-   * @param  niovOut              Number of valid iovecs referenced by iovOut.
+   * @param reply                 TypedReply.
+   * @param reqId                 Request id.
+   * @param supportedCodecs       Range of supported codecs.
+   * @param compressionCodecMap   Map of available codecs.
+   * @param dropProbability       Probability to drop subsequent request.
+   * @param serverLoad            Represents load on the server.
+   * @param iovOut                Will be set to the beginning of
+   *                              array of iovecs
+   * @param niovOut               Number of valid iovecs referenced by iovOut.
    *
    * @return true if message was successfully prepared.
    */
@@ -78,6 +81,7 @@ class CaretSerializedMessage {
       const CodecIdRange& supportedCodecs,
       const CompressionCodecMap* compressionCodecMap,
       double dropProbability,
+      ServerLoad serverLoad,
       const struct iovec*& iovOut,
       size_t& niovOut) noexcept;
 
@@ -89,7 +93,7 @@ class CaretSerializedMessage {
       const Message& message,
       uint32_t reqId,
       size_t typeId,
-      uint64_t traceId,
+      std::pair<uint64_t, uint64_t> traceId,
       const CodecIdRange& supportedCodecs,
       const struct iovec*& iovOut,
       size_t& niovOut);
@@ -99,10 +103,11 @@ class CaretSerializedMessage {
       const Message& message,
       uint32_t reqId,
       size_t typeId,
-      uint64_t traceId,
+      std::pair<uint64_t, uint64_t> traceId,
       const CodecIdRange& supportedCodecs,
       const CompressionCodecMap* compressionCodecMap,
       double dropProbability,
+      ServerLoad serverLoad,
       const struct iovec*& iovOut,
       size_t& niovOut);
 
@@ -110,8 +115,9 @@ class CaretSerializedMessage {
       UmbrellaMessageInfo& info,
       uint32_t reqId,
       size_t typeId,
-      uint64_t traceId,
+      std::pair<uint64_t, uint64_t> traceId,
       double dropProbability,
+      ServerLoad serverLoad,
       const struct iovec*& iovOut,
       size_t& niovOut);
 

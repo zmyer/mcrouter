@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include <gtest/gtest.h>
@@ -148,7 +146,7 @@ std::unique_ptr<folly::IOBuf> lz4Decompress(
     size_t uncompressedLength) {
   auto bytes = data.coalesce();
   auto buffer = folly::IOBuf::create(uncompressedLength);
-  int bytesWritten = LZ4_decompress_safe_usingDict(
+  int ret = LZ4_decompress_safe_usingDict(
       reinterpret_cast<const char*>(bytes.data()),
       reinterpret_cast<char*>(buffer->writableTail()),
       data.length(),
@@ -156,11 +154,24 @@ std::unique_ptr<folly::IOBuf> lz4Decompress(
       reinterpret_cast<const char*>(dictionary->data()),
       dictionary->length());
 
+  assert(ret >= 0);
+
+  auto const bytesWritten = static_cast<size_t>(ret);
   // Should either fail completely or decompress everything.
   assert(bytesWritten == uncompressedLength);
 
   buffer->append(bytesWritten);
   return buffer;
+}
+
+void checkEqual(
+    const std::unique_ptr<folly::IOBuf>& source,
+    const std::unique_ptr<folly::IOBuf>& decompressed) {
+  EXPECT_EQ(
+      source->computeChainDataLength(), decompressed->computeChainDataLength());
+  auto sourceStr = source->moveToFbString();
+  auto decompressedStr = decompressed->moveToFbString();
+  EXPECT_EQ(sourceStr, decompressedStr);
 }
 
 } // anonymous namespace
@@ -179,10 +190,7 @@ TEST(Lz4Immutable, lz4Compatibility_ascii) {
   auto decompressed =
       lz4Decompress(dictionary->clone(), *compressed, sourceSize);
 
-  EXPECT_EQ(sourceSize, decompressed->computeChainDataLength());
-  auto sourceStr = source->moveToFbString();
-  auto decompressedStr = decompressed->moveToFbString();
-  EXPECT_EQ(sourceStr, decompressedStr);
+  checkEqual(source, decompressed);
 }
 TEST(Lz4Immutable, lz4Compatibility_binary) {
   auto dictionary = getRandomBinaryData(64 * 1024);
@@ -198,10 +206,37 @@ TEST(Lz4Immutable, lz4Compatibility_binary) {
   auto decompressed =
       lz4Decompress(dictionary->clone(), *compressed, sourceSize);
 
-  EXPECT_EQ(sourceSize, decompressed->computeChainDataLength());
-  auto sourceStr = source->moveToFbString();
-  auto decompressedStr = decompressed->moveToFbString();
-  EXPECT_EQ(sourceStr, decompressedStr);
+  checkEqual(source, decompressed);
+}
+
+TEST(Lz4Immutable, emptyData) {
+  auto dictionary = getAsciiDictionary();
+  Lz4Immutable compressor(dictionary->clone());
+
+  auto source = folly::IOBuf::create(0);
+  auto sourceSize = source->computeChainDataLength();
+
+  // Compress
+  auto compressed = compressor.compress(*source);
+
+  // Uncompress
+  auto decompressed = compressor.decompress(*compressed, sourceSize);
+
+  checkEqual(source, decompressed);
+}
+
+TEST(Lz4Immutable, error_checks) {
+  auto dictionary = getAsciiDictionary();
+  Lz4Immutable compressor(dictionary->clone());
+
+  iovec iov = {nullptr, 0};
+
+  // No iovecs specified
+  EXPECT_EQ(0, compressor.compress(&iov, 0)->length());
+
+  // Input too large
+  iov.iov_len = std::numeric_limits<size_t>::max();
+  EXPECT_THROW(compressor.compress(&iov, 1), std::invalid_argument);
 }
 
 TEST(Lz4Immutable, largeData_ascii) {
@@ -217,10 +252,7 @@ TEST(Lz4Immutable, largeData_ascii) {
   // Uncompress
   auto decompressed = compressor.decompress(*compressed, sourceSize);
 
-  EXPECT_EQ(sourceSize, decompressed->computeChainDataLength());
-  auto sourceStr = source->moveToFbString();
-  auto decompressedStr = decompressed->moveToFbString();
-  EXPECT_EQ(sourceStr, decompressedStr);
+  checkEqual(source, decompressed);
 }
 TEST(Lz4Immutable, largeData_binary) {
   auto dictionary = getRandomBinaryData(64 * 1024);
@@ -235,10 +267,7 @@ TEST(Lz4Immutable, largeData_binary) {
   // Uncompress
   auto decompressed = compressor.decompress(*compressed, sourceSize);
 
-  EXPECT_EQ(sourceSize, decompressed->computeChainDataLength());
-  auto sourceStr = source->moveToFbString();
-  auto decompressedStr = decompressed->moveToFbString();
-  EXPECT_EQ(sourceStr, decompressedStr);
+  checkEqual(source, decompressed);
 }
 
 TEST(Lz4Immutable, hugeData_ascii) {
@@ -254,10 +283,7 @@ TEST(Lz4Immutable, hugeData_ascii) {
   // Uncompress
   auto decompressed = compressor.decompress(*compressed, sourceSize);
 
-  EXPECT_EQ(sourceSize, decompressed->computeChainDataLength());
-  auto sourceStr = source->moveToFbString();
-  auto decompressedStr = decompressed->moveToFbString();
-  EXPECT_EQ(sourceStr, decompressedStr);
+  checkEqual(source, decompressed);
 }
 TEST(Lz4Immutable, hugeData_binary) {
   auto dictionary = getRandomBinaryData(64 * 1024);
@@ -273,10 +299,7 @@ TEST(Lz4Immutable, hugeData_binary) {
   // Uncompress
   auto decompressed = compressor.decompress(*compressed, sourceSize);
 
-  EXPECT_EQ(sourceSize, decompressed->computeChainDataLength());
-  auto sourceStr = source->moveToFbString();
-  auto decompressedStr = decompressed->moveToFbString();
-  EXPECT_EQ(sourceStr, decompressedStr);
+  checkEqual(source, decompressed);
 }
 
 TEST(Lz4Immutable, chained_ascii) {
@@ -295,10 +318,7 @@ TEST(Lz4Immutable, chained_ascii) {
   // Uncompress
   auto decompressed = compressor.decompress(*compressed, sourceSize);
 
-  EXPECT_EQ(sourceSize, decompressed->computeChainDataLength());
-  auto sourceStr = source->moveToFbString();
-  auto decompressedStr = decompressed->moveToFbString();
-  EXPECT_EQ(sourceStr, decompressedStr);
+  checkEqual(source, decompressed);
 }
 TEST(Lz4Immutable, chained_binary) {
   auto dictionary = getRandomBinaryData(64 * 1024);
@@ -316,8 +336,58 @@ TEST(Lz4Immutable, chained_binary) {
   // Uncompress
   auto decompressed = compressor.decompress(*compressed, sourceSize);
 
-  EXPECT_EQ(sourceSize, decompressed->computeChainDataLength());
-  auto sourceStr = source->moveToFbString();
-  auto decompressedStr = decompressed->moveToFbString();
-  EXPECT_EQ(sourceStr, decompressedStr);
+  checkEqual(source, decompressed);
+}
+
+TEST(Lz4Immutable, compress_into) {
+  auto dictionary = getAsciiDictionary();
+  Lz4Immutable compressor(dictionary->clone());
+
+  std::vector<char> buffer(10);
+
+  iovec iov = {nullptr, 0};
+
+  // No iovecs specified
+  EXPECT_EQ(0, compressor.compressInto(&iov, 0, buffer.data(), buffer.size()));
+
+  // Input too large
+  iov.iov_len = std::numeric_limits<size_t>::max();
+  EXPECT_THROW(
+      compressor.compressInto(&iov, 1, buffer.data(), buffer.size()),
+      std::invalid_argument);
+
+  // Destination too small
+  auto source = getRandomAsciiData();
+  auto iovs = source->getIov();
+  EXPECT_THROW(
+      compressor.compressInto(
+          iovs.data(), iovs.size(), buffer.data(), buffer.size()),
+      std::invalid_argument);
+
+  // Compress with one iovec
+  buffer.resize(compressor.compressBound(source->length()));
+  const size_t compressedSize = compressor.compressInto(
+      iovs.data(), iovs.size(), buffer.data(), buffer.size());
+  EXPECT_GT(compressedSize, 0);
+
+  // Decompress and verify
+  iov.iov_base = buffer.data();
+  iov.iov_len = compressedSize;
+  auto decompressed = compressor.decompress(&iov, 1, source->length());
+  checkEqual(source, decompressed);
+
+  // Compress with multiple iovecs
+  source = getRandomAsciiData();
+  auto chainedSource = buildChain(*source, 4);
+  iovs = chainedSource->getIov();
+  buffer.resize(compressor.compressBound(source->length()));
+
+  const size_t chainedCompressedSize = compressor.compressInto(
+      iovs.data(), iovs.size(), buffer.data(), buffer.size());
+  EXPECT_GT(chainedCompressedSize, 0);
+
+  iov.iov_base = buffer.data();
+  iov.iov_len = chainedCompressedSize;
+  decompressed = compressor.decompress(&iov, 1, source->length());
+  checkEqual(source, decompressed);
 }

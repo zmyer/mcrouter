@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2015-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 namespace facebook {
@@ -19,8 +17,7 @@ struct AsciiSerializedRequest::PrepareImplWrapper {
   template <class Request>
   typename std::enable_if<
       std::is_same<PrepareType<Request>, std::false_type>::value,
-      bool>::
-      type static prepare(AsciiSerializedRequest& s, const Request& request) {
+      bool>::type static prepare(AsciiSerializedRequest&, const Request&) {
     return false;
   }
 

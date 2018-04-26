@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -34,6 +32,8 @@ static_assert(false, "mcrouter: invalid build");
 #define MCROUTER_RUNTIME_VARS_DEFAULT ""
 #define MCROUTER_STATS_ROOT_DEFAULT "/var/mcrouter/stats"
 #define DEBUG_FIFO_ROOT_DEFAULT "/var/mcrouter/fifos"
+#define CONFIG_DUMP_ROOT_DEFAULT "/var/mcrouter/config"
+#define MCROUTER_DEFAULT_CA_PATH ""
 
 namespace folly {
 struct dynamic;
@@ -59,9 +59,6 @@ inline LogPostprocessCallbackFunc getLogPostprocessFunc() {
 
 namespace mcrouter {
 
-template <class RouteHandleIf>
-class ExtraRouteHandleProviderIf;
-
 class CarbonRouterInstanceBase;
 class ConfigApi;
 class McrouterLogger;
@@ -77,9 +74,14 @@ struct ProxyStatsContainer {
 
 class AdditionalProxyRequestLogger : public carbon::NoopAdditionalLogger {
  public:
-  explicit AdditionalProxyRequestLogger(ProxyBase* proxy)
-      : NoopAdditionalLogger(proxy) {}
+  explicit AdditionalProxyRequestLogger(
+      const ProxyRequestContext& proxyRequestContext)
+      : NoopAdditionalLogger(proxyRequestContext) {}
 };
+
+inline bool alwaysSendToMainShardSplit(uint64_t /* flags */) {
+  return false;
+}
 
 /**
  * @return monotonic time suitable for measuring intervals in microseconds.
@@ -104,6 +106,10 @@ inline time_t nowWallSec() {
   return time(nullptr);
 }
 
+bool readLibmcrouterFlavor(
+    folly::StringPiece flavor,
+    std::unordered_map<std::string, std::string>& options);
+
 bool read_standalone_flavor(
     const std::string& flavor,
     std::unordered_map<std::string, std::string>& option_dict,
@@ -113,12 +119,12 @@ std::unique_ptr<ConfigApi> createConfigApi(const McrouterOptions& opts);
 
 std::string performOptionSubstitution(std::string str);
 
+inline void standalonePreInitFromCommandLineOpts(
+    const std::unordered_map<std::string, std::string>& st_option_dict) {}
+
 inline void standaloneInit(
     const McrouterOptions& opts,
     const McrouterStandaloneOptions& standaloneOpts) {}
-
-std::unique_ptr<ExtraRouteHandleProviderIf<MemcacheRouterInfo>>
-createExtraRouteHandleProvider();
 
 std::unique_ptr<McrouterLogger> createMcrouterLogger(
     CarbonRouterInstanceBase& router);
@@ -157,6 +163,22 @@ void insertCustomStartupOpts(folly::dynamic& options);
 
 std::string getBinPath(folly::StringPiece name);
 
+std::string getDefaultPemCertPath();
+std::string getDefaultPemCertKey();
+
+/**
+ * Reads a static json file. Do not monitor for changes.
+ * May throw if there's an error while parsing file contents.
+ *
+ * @params file   The path of the json file.
+ *
+ * @return        folly::dynamic with the contents of the file.
+ *                nullptr if cannot open/read the file
+ *                may throw exception if invalid json
+ *
+ */
+folly::dynamic readStaticJsonFile(folly::StringPiece file);
+
 #ifndef MCROUTER_PACKAGE_STRING
 #define MCROUTER_PACKAGE_STRING "1.0.0 mcrouter"
 #endif
@@ -167,6 +189,7 @@ startObservingRuntimeVarsFileCustom(
     std::function<void(std::string)> onUpdate) {
   return folly::none;
 }
-}
-}
-} // facebook::memcache::mcrouter
+
+} // mcrouter
+} // memcache
+} // facebook

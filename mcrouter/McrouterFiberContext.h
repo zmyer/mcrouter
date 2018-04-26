@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2015-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -15,6 +13,8 @@
 #include <folly/Range.h>
 #include <folly/ScopeGuard.h>
 #include <folly/fibers/FiberManager.h>
+
+#include "mcrouter/lib/network/ServerLoad.h"
 
 namespace facebook {
 namespace memcache {
@@ -56,6 +56,7 @@ class fiber_local {
   struct McrouterFiberContext {
     std::shared_ptr<ProxyRequestContextWithInfo<RouterInfo>> sharedCtx;
     folly::StringPiece asynclogName;
+    ServerLoad load{0};
     RequestClass requestClass;
     bool failoverTag{false};
     bool failoverDisabled{false};
@@ -183,6 +184,14 @@ class fiber_local {
    */
   static bool getFailoverDisabled() {
     return folly::fibers::local<McrouterFiberContext>().failoverDisabled;
+  }
+
+  static void setServerLoad(ServerLoad load) {
+    folly::fibers::local<McrouterFiberContext>().load = load;
+  }
+
+  static ServerLoad getServerLoad() {
+    return folly::fibers::local<McrouterFiberContext>().load;
   }
 };
 

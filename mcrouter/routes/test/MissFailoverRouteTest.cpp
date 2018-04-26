@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include <memory>
@@ -78,6 +76,54 @@ TEST(missMissFailoverRouteTest, fail) {
   // Should get the last reply
   EXPECT_EQ("c", carbon::valueRangeSlow(reply).str());
   EXPECT_EQ(mc_res_timeout, reply.result());
+}
+
+TEST(missMissFailoverRouteTest, bestOnError1) {
+  vector<std::shared_ptr<TestHandle>> test_handles{
+      make_shared<TestHandle>(GetRouteTestData(mc_res_notfound, "a")),
+      make_shared<TestHandle>(GetRouteTestData(mc_res_timeout, "b")),
+      make_shared<TestHandle>(GetRouteTestData(mc_res_timeout, "c"))};
+
+  TestRouteHandle<MissFailoverRoute<TestRouterInfo>> rh(
+      get_route_handles(test_handles), true);
+
+  auto reply = rh.route(McGetRequest("0"));
+
+  // Should return the first and the only healthy reply
+  EXPECT_EQ("a", carbon::valueRangeSlow(reply).str());
+  EXPECT_EQ(mc_res_notfound, reply.result());
+}
+
+TEST(missMissFailoverRouteTest, bestOnError2) {
+  vector<std::shared_ptr<TestHandle>> test_handles{
+      make_shared<TestHandle>(GetRouteTestData(mc_res_timeout, "a")),
+      make_shared<TestHandle>(GetRouteTestData(mc_res_notfound, "b")),
+      make_shared<TestHandle>(GetRouteTestData(mc_res_timeout, "c"))};
+
+  TestRouteHandle<MissFailoverRoute<TestRouterInfo>> rh(
+      get_route_handles(test_handles), true);
+
+  auto reply = rh.route(McGetRequest("0"));
+
+  // Should return the only failover-healthy reply
+  EXPECT_EQ("b", carbon::valueRangeSlow(reply).str());
+  EXPECT_EQ(mc_res_notfound, reply.result());
+}
+
+TEST(missMissFailoverRouteTest, bestOnError3) {
+  vector<std::shared_ptr<TestHandle>> test_handles{
+      make_shared<TestHandle>(GetRouteTestData(mc_res_timeout, "a")),
+      make_shared<TestHandle>(GetRouteTestData(mc_res_notfound, "b")),
+      make_shared<TestHandle>(GetRouteTestData(mc_res_notfound, "c"))};
+
+  TestRouteHandle<MissFailoverRoute<TestRouterInfo>> rh(
+      get_route_handles(test_handles), true);
+
+  auto reply = rh.route(McGetRequest("0"));
+
+  // Should get the LAST healthy reply
+  EXPECT_EQ("c", carbon::valueRangeSlow(reply).str());
+  EXPECT_EQ(mc_res_notfound, reply.result());
 }
 
 TEST(missMissFailoverRouteTest, nonGetLike) {

@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2015-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include <gtest/gtest.h>
@@ -77,7 +75,7 @@ TEST(CarbonMockMc, basic) {
   ListenSocket listenSock;
 
   AsyncMcServer::Options opts;
-  opts.existingSocketFd = listenSock.getSocketFd();
+  opts.existingSocketFd = listenSock.releaseSocketFd();
   opts.numThreads = 1;
 
   MockMc mc;
@@ -103,7 +101,7 @@ TEST(CarbonMockMc, basic) {
   requestInfo.bodySize = storage.computeBodySize();
   requestInfo.typeId = 1;
   requestInfo.reqId = 100;
-  requestInfo.traceId = 0;
+  requestInfo.traceId = {0, 0};
   requestInfo.headerSize = caretPrepareHeader(
       requestInfo, reinterpret_cast<char*>(storage.getHeaderBuf()));
   storage.reportHeaderSize(requestInfo.headerSize);

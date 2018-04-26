@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -26,22 +24,22 @@ class McExtraRouteHandleProvider
  public:
   using RouteHandleIf = typename RouterInfo::RouteHandleIf;
 
-  virtual std::shared_ptr<RouteHandleIf> makeShadow(
+  std::shared_ptr<RouteHandleIf> makeShadow(
       ProxyBase& proxy,
       std::shared_ptr<RouteHandleIf> destination,
       ShadowData<RouterInfo> data,
       folly::StringPiece shadowPolicy) override;
 
-  virtual std::shared_ptr<RouteHandleIf> makeFailoverRoute(
+  std::shared_ptr<RouteHandleIf> makeFailoverRoute(
       const folly::dynamic& json,
       std::vector<std::shared_ptr<RouteHandleIf>> children) override;
 
-  virtual std::vector<std::shared_ptr<RouteHandleIf>> tryCreate(
+  std::vector<std::shared_ptr<RouteHandleIf>> tryCreate(
       RouteHandleFactory<RouteHandleIf>& factory,
       folly::StringPiece type,
       const folly::dynamic& json) override;
 
-  virtual ~McExtraRouteHandleProvider() {}
+  ~McExtraRouteHandleProvider() override {}
 };
 }
 }

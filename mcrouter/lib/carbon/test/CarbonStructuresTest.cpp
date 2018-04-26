@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include <sys/uio.h>
@@ -138,9 +136,31 @@ TEST(CarbonBasic, defaultConstructed) {
   // Vector of enums
   EXPECT_TRUE(req.testEnumVec().empty());
 
+  // Vector of vectors
+  EXPECT_TRUE(req.testNestedVec().empty());
+
   // folly::Optional fields
   EXPECT_FALSE(req.testOptionalString());
   EXPECT_FALSE(req.testOptionalIobuf());
+
+  // Unordered map
+  EXPECT_TRUE(req.testUMap().empty());
+
+  // Ordered map
+  EXPECT_TRUE(req.testMap().empty());
+
+  // Complex map
+  EXPECT_TRUE(req.testComplexMap().empty());
+
+  // Unordered set
+  EXPECT_TRUE(req.testUSet().empty());
+
+  // Ordered set
+  EXPECT_TRUE(req.testSet().empty());
+
+  // User Type
+  EXPECT_TRUE(carbon::SerializationTraits<carbon::test::UserType>::isEmpty(
+      req.testType()));
 
   // fields generated for every request (will likely be removed in the future)
   EXPECT_EQ(0, req.exptime());
@@ -238,12 +258,70 @@ TEST(CarbonBasic, setAndGet) {
   req.testEnumVec() = enums;
   EXPECT_EQ(enums, req.testEnumVec());
 
+  // Union
+  req.testUnion().emplace<2>(true);
+  bool b = req.testUnion().get<2>();
+  EXPECT_TRUE(b);
+  req.testUnion().emplace<1>(123);
+  EXPECT_EQ(123, req.testUnion().get<1>());
+  req.testUnion().emplace<3>("a");
+  EXPECT_EQ("a", req.testUnion().get<3>());
+
+  // Vector of vectors
+  std::vector<std::vector<uint64_t>> vectors = {{1, 1, 1}, {2, 2}};
+  req.testNestedVec() = vectors;
+  EXPECT_EQ(vectors, req.testNestedVec());
+
   // folly::Optional fields
   const auto s = longString();
   req.testOptionalString() = s;
   EXPECT_EQ(s, *req.testOptionalString());
   req.testOptionalIobuf() = folly::IOBuf(folly::IOBuf::COPY_BUFFER, s);
   EXPECT_EQ(s, coalesceAndGetRange(*req.testOptionalIobuf()));
+  req.testOptionalBool() = false;
+  EXPECT_EQ(false, *req.testOptionalBool());
+  std::vector<folly::Optional<std::string>> ovec;
+  ovec.emplace_back(folly::Optional<std::string>("hello"));
+  req.testOptionalVec() = ovec;
+  EXPECT_EQ(ovec, req.testOptionalVec());
+
+  // Unordered map
+  std::unordered_map<std::string, std::string> stringmap;
+  stringmap.insert({"key", "value"});
+  req.testUMap() = stringmap;
+  EXPECT_EQ(stringmap, req.testUMap());
+
+  // Ordered map
+  std::map<double, double> doublemap;
+  doublemap.insert({1.08, 8.3});
+  req.testMap() = doublemap;
+  EXPECT_EQ(doublemap, req.testMap());
+
+  // Complex map
+  std::map<std::string, std::vector<uint16_t>> complexmap;
+  complexmap.insert({"key", {1, 2}});
+  req.testComplexMap() = complexmap;
+  EXPECT_EQ(complexmap, req.testComplexMap());
+
+  // Unordered set
+  std::unordered_set<std::string> stringset;
+  stringset.insert("hello");
+  stringset.insert("world");
+  req.testUSet() = stringset;
+  EXPECT_EQ(stringset, req.testUSet());
+
+  // Ordered set
+  std::set<uint64_t> intset;
+  intset.insert(1);
+  intset.insert(2);
+  req.testSet() = intset;
+  EXPECT_EQ(intset, req.testSet());
+
+  // User type
+  carbon::test::UserType testType = {"blah", {1, 2, 3}};
+  req.testType() = testType;
+  EXPECT_EQ(testType.name, req.testType().name);
+  EXPECT_EQ(testType.points, req.testType().points);
 }
 
 TEST(CarbonTest, serializeDeserialize) {
@@ -281,11 +359,102 @@ TEST(CarbonTest, serializeDeserialize) {
   EXPECT_FALSE(outRequest.testOptionalString().hasValue());
   // Other optional field gets a value of zero length
   outRequest.testOptionalIobuf() = folly::IOBuf(folly::IOBuf::COPY_BUFFER, "");
+  // Union
+  outRequest.testUnion().emplace<3>("abc");
 
   outRequest.testEnumVec().push_back(carbon::test2::util::SimpleEnum::Twenty);
 
+  outRequest.testNestedVec().push_back({100, 2000});
+
+  outRequest.testUMap().insert({"hello", "world"});
+  outRequest.testMap().insert({1.08, 8.3});
+  outRequest.testComplexMap().insert({"key", {1, 2}});
+
+  outRequest.testUSet().insert("hello");
+  outRequest.testSet().insert(123);
+
+  outRequest.testType() = {"blah", {1, 2, 3}};
+
+  outRequest.testOptionalBool() = false;
+
+  outRequest.testOptionalVec().emplace_back(folly::Optional<std::string>(""));
+  outRequest.testOptionalVec().emplace_back(folly::Optional<std::string>());
+  outRequest.testOptionalVec().emplace_back(
+      folly::Optional<std::string>("hello"));
+
+  outRequest.testIOBufList().emplace_back(folly::IOBuf());
+
   const auto inRequest = serializeAndDeserialize(outRequest);
   expectEqTestRequest(outRequest, inRequest);
+}
+
+TEST(CarbonTest, unionZeroSerialization) {
+  TestRequest outRequest;
+  outRequest.testUnion().emplace<1>(0);
+  auto inRequest = serializeAndDeserialize(outRequest);
+  EXPECT_EQ(0, inRequest.testUnion().get<1>());
+
+  outRequest.testUnion().emplace<3>("");
+  inRequest = serializeAndDeserialize(outRequest);
+  EXPECT_EQ("", inRequest.testUnion().get<3>());
+}
+
+TEST(CarbonTest, OptionalUnionSerialization) {
+  carbon::test::TestOptionalUnion testOpt;
+  testOpt.emplace<1>(1);
+  auto inOpt = serializeAndDeserialize(testOpt);
+  ASSERT_EQ(1, inOpt.which());
+  EXPECT_EQ(testOpt.umember1().hasValue(), inOpt.umember1().hasValue());
+  EXPECT_EQ(1, inOpt.umember1().value());
+
+  testOpt.emplace<1>(folly::Optional<int64_t>());
+  inOpt = serializeAndDeserialize(testOpt);
+  ASSERT_EQ(1, inOpt.which());
+  EXPECT_EQ(testOpt.umember1().hasValue(), inOpt.umember1().hasValue());
+
+  testOpt.emplace<2>(folly::Optional<bool>(false));
+  inOpt = serializeAndDeserialize(testOpt);
+  ASSERT_EQ(2, inOpt.which());
+  EXPECT_EQ(testOpt.umember2().hasValue(), inOpt.umember2().hasValue());
+  EXPECT_EQ(false, inOpt.umember2().value());
+
+  testOpt.emplace<2>(folly::Optional<bool>());
+  inOpt = serializeAndDeserialize(testOpt);
+  ASSERT_EQ(2, inOpt.which());
+  EXPECT_EQ(testOpt.umember2().hasValue(), inOpt.umember2().hasValue());
+
+  testOpt.emplace<3>(folly::Optional<std::string>("test"));
+  inOpt = serializeAndDeserialize(testOpt);
+  ASSERT_EQ(3, inOpt.which());
+  EXPECT_EQ(testOpt.umember3().hasValue(), inOpt.umember3().hasValue());
+  EXPECT_EQ("test", inOpt.umember3().value());
+
+  testOpt.emplace<3>(folly::Optional<std::string>());
+  inOpt = serializeAndDeserialize(testOpt);
+  ASSERT_EQ(3, inOpt.which());
+  EXPECT_EQ(testOpt.umember3().hasValue(), inOpt.umember3().hasValue());
+}
+
+TEST(CarbonTest, OptionalBoolSerializationBytesWritten) {
+  carbon::test::TestOptionalBool testOpt;
+  size_t bytesWritten;
+  folly::Optional<bool> opt;
+  testOpt.optionalBool() = opt;
+  auto inOpt = serializeAndDeserialize(testOpt, bytesWritten);
+  EXPECT_EQ(testOpt.optionalBool(), inOpt.optionalBool());
+  EXPECT_EQ(1, bytesWritten); // One byte written for FieldType::Stop
+
+  bytesWritten = 0;
+  testOpt.optionalBool() = true;
+  inOpt = serializeAndDeserialize(testOpt, bytesWritten);
+  EXPECT_EQ(testOpt.optionalBool(), inOpt.optionalBool());
+  EXPECT_EQ(2, bytesWritten);
+
+  bytesWritten = 0;
+  testOpt.optionalBool() = false;
+  inOpt = serializeAndDeserialize(testOpt, bytesWritten);
+  EXPECT_EQ(testOpt.optionalBool(), inOpt.optionalBool());
+  EXPECT_EQ(2, bytesWritten);
 }
 
 TEST(CarbonTest, mixins) {

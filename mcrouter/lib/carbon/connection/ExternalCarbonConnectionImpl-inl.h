@@ -1,14 +1,13 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2017-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
-
-#include <folly/Memory.h>
+#include <functional>
+#include <memory>
+#include <utility>
 
 namespace carbon {
 namespace detail {
@@ -188,7 +187,7 @@ void ExternalCarbonConnectionImpl::sendRequestOne(
   try {
     impl_->sendRequestOne(req, std::move(cb));
   } catch (const CarbonConnectionRecreateException&) {
-    impl_ = folly::make_unique<Impl>(connectionOptions_, options_);
+    impl_ = std::make_unique<Impl>(connectionOptions_, options_);
     return impl_->sendRequestOne(req, std::move(cb));
   }
 }
@@ -200,8 +199,9 @@ void ExternalCarbonConnectionImpl::sendRequestMulti(
   try {
     impl_->sendRequestMulti(std::move(reqs), std::move(cb));
   } catch (const CarbonConnectionRecreateException&) {
-    impl_ = folly::make_unique<Impl>(connectionOptions_, options_);
+    impl_ = std::make_unique<Impl>(connectionOptions_, options_);
     return impl_->sendRequestMulti(std::move(reqs), std::move(cb));
   }
 }
-}
+
+} // carbon

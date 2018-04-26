@@ -1,30 +1,32 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2017-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include <gtest/gtest.h>
 #include <vector>
 
-#include <folly/Baton.h>
 #include <folly/Conv.h>
 #include <folly/fibers/EventBaseLoopController.h>
 #include <folly/fibers/FiberManager.h>
 #include <folly/io/IOBuf.h>
 #include <folly/io/async/EventBase.h>
+#include <folly/synchronization/Baton.h>
 
 #include <mcrouter/lib/network/AsyncMcClient.h>
 #include <mcrouter/options.h>
 #include "mcrouter/lib/network/gen/MemcacheConnection.h"
 #include "mcrouter/lib/network/test/TestClientServerUtil.h"
 
+using facebook::memcache::test::TestServer;
+
 TEST(MemcacheExternalConnectionTest, simpleExternalConnection) {
-  auto server = facebook::memcache::test::TestServer::create(
-      false /* outOfOrder */, false /* useSsl */);
+  TestServer::Config config;
+  config.outOfOrder = false;
+  config.useSsl = false;
+  auto server = TestServer::create(std::move(config));
   auto conn = std::make_unique<facebook::memcache::MemcacheExternalConnection>(
       facebook::memcache::ConnectionOptions(
           "localhost", server->getListenPort(), mc_caret_protocol));
@@ -58,8 +60,10 @@ TEST(MemcacheExternalConnectionTest, simpleExternalConnection) {
 }
 
 TEST(MemcachePooledConnectionTest, PooledExternalConnection) {
-  auto server = facebook::memcache::test::TestServer::create(
-      false /* outOfOrder */, false /* useSsl */);
+  TestServer::Config config;
+  config.outOfOrder = false;
+  config.useSsl = false;
+  auto server = TestServer::create(std::move(config));
   std::vector<std::unique_ptr<facebook::memcache::MemcacheConnection>> conns;
   for (int i = 0; i < 4; i++) {
     conns.push_back(
@@ -100,8 +104,13 @@ TEST(MemcachePooledConnectionTest, PooledExternalConnection) {
 }
 
 TEST(MemcacheInternalConnectionTest, simpleInternalConnection) {
-  auto server = facebook::memcache::test::TestServer::create(
-      false /* outOfOrder */, false /* useSsl */);
+  folly::SingletonVault::singleton()->destroyInstances();
+  folly::SingletonVault::singleton()->reenableInstances();
+
+  TestServer::Config config;
+  config.outOfOrder = false;
+  config.useSsl = false;
+  auto server = TestServer::create(std::move(config));
   facebook::memcache::McrouterOptions mcrouterOptions;
   mcrouterOptions.num_proxies = 1;
   mcrouterOptions.default_route = "/oregon/*/";
@@ -151,8 +160,13 @@ TEST(MemcacheInternalConnectionTest, simpleInternalConnection) {
 }
 
 TEST(MemcachePooledConnectionTest, PooledInternalConnection) {
-  auto server = facebook::memcache::test::TestServer::create(
-      false /* outOfOrder */, false /* useSsl */);
+  folly::SingletonVault::singleton()->destroyInstances();
+  folly::SingletonVault::singleton()->reenableInstances();
+
+  TestServer::Config config;
+  config.outOfOrder = false;
+  config.useSsl = false;
+  auto server = TestServer::create(std::move(config));
   facebook::memcache::McrouterOptions mcrouterOptions;
   mcrouterOptions.num_proxies = 1;
   mcrouterOptions.default_route = "/oregon/*/";

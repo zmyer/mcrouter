@@ -1,16 +1,15 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "ProxyDestinationMap.h"
 
+#include <memory>
+
 #include <folly/Format.h>
-#include <folly/Memory.h>
 #include <folly/io/async/AsyncTimeout.h>
 #include <folly/io/async/EventBase.h>
 
@@ -49,19 +48,19 @@ struct ProxyDestinationMap::StateList {
 
 ProxyDestinationMap::ProxyDestinationMap(ProxyBase* proxy)
     : proxy_(proxy),
-      active_(folly::make_unique<StateList>()),
-      inactive_(folly::make_unique<StateList>()),
-      inactivityTimeout_(0),
-      resetTimer_(nullptr) {}
+      active_(std::make_unique<StateList>()),
+      inactive_(std::make_unique<StateList>()),
+      inactivityTimeout_(0) {}
 
 std::shared_ptr<ProxyDestination> ProxyDestinationMap::emplace(
     std::shared_ptr<AccessPoint> ap,
     std::chrono::milliseconds timeout,
     uint64_t qosClass,
-    uint64_t qosPath) {
+    uint64_t qosPath,
+    folly::StringPiece routerInfoName) {
   auto key = genProxyDestinationKey(*ap, timeout);
   auto destination = ProxyDestination::create(
-      *proxy_, std::move(ap), timeout, qosClass, qosPath);
+      *proxy_, std::move(ap), timeout, qosClass, qosPath, routerInfoName);
   {
     std::lock_guard<std::mutex> lck(destinationsLock_);
     auto destIt = destinations_.emplace(key, destination);
@@ -135,34 +134,28 @@ void ProxyDestinationMap::resetAllInactive() {
 }
 
 void ProxyDestinationMap::setResetTimer(std::chrono::milliseconds interval) {
-  using TimerType = AsyncTimer<ProxyDestinationMap>;
-
   assert(interval.count() > 0);
   inactivityTimeout_ = static_cast<uint32_t>(interval.count());
-  resetTimer_ = folly::make_unique<TimerType>(*this);
-
-  resetTimer_->attachEventBase(std::addressof(proxy_->eventBase()));
-  if (!resetTimer_->scheduleTimeout(inactivityTimeout_)) {
-    MC_LOG_FAILURE(
-        proxy_->router().opts(),
-        memcache::failure::Category::kSystemError,
-        "failed to schedule inactivity timer");
-  }
+  resetTimer_ =
+      folly::AsyncTimeout::make(proxy_->eventBase(), [this]() noexcept {
+        resetAllInactive();
+        scheduleTimer(false /* initialAttempt */);
+      });
+  scheduleTimer(true /* initialAttempt */);
 }
 
-void ProxyDestinationMap::timerCallback() {
-  resetAllInactive();
-
-  assert(inactivityTimeout_ > 0);
+void ProxyDestinationMap::scheduleTimer(bool initialAttempt) {
   if (!resetTimer_->scheduleTimeout(inactivityTimeout_)) {
     MC_LOG_FAILURE(
         proxy_->router().opts(),
         memcache::failure::Category::kSystemError,
-        "failed to re-schedule inactivity timer");
+        "failed to {}schedule inactivity timer",
+        initialAttempt ? "" : "re-");
   }
 }
 
 ProxyDestinationMap::~ProxyDestinationMap() {}
-}
-}
-} // facebook::memcache::mcrouter
+
+} // mcrouter
+} // memcache
+} // facebook

@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -20,6 +18,7 @@
 #include "mcrouter/lib/debug/ConnectionFifo.h"
 #include "mcrouter/lib/network/AsyncMcServerWorkerOptions.h"
 #include "mcrouter/lib/network/ServerMcParser.h"
+#include "mcrouter/lib/network/WriteBuffer.h"
 #include "mcrouter/lib/network/gen/Memcache.h"
 
 namespace facebook {
@@ -98,7 +97,7 @@ class McServerSession : public folly::DelayedDestruction,
       folly::AsyncTransportWrapper::UniquePtr transport,
       std::shared_ptr<McServerOnRequest> cb,
       StateCallback& stateCb,
-      AsyncMcServerWorkerOptions options,
+      const AsyncMcServerWorkerOptions& options,
       void* userCtxt,
       const CompressionCodecMap* codecMap = nullptr);
 
@@ -107,6 +106,12 @@ class McServerSession : public folly::DelayedDestruction,
    * Please refer create() for info about the callbacks invoked.
    */
   void close();
+
+  /**
+   * Same as close(), but if GoAway is enabled, will send the message to the
+   * client and wait for acknowledgement before actually closing.
+   */
+  void beginClose(folly::StringPiece reason);
 
   /**
    * Returns true if there are some unfinished writes pending to the transport.
@@ -164,12 +169,17 @@ class McServerSession : public folly::DelayedDestruction,
     return options_.memController;
   }
 
+  const folly::AsyncTransportWrapper* getTransport() const noexcept {
+    return transport_.get();
+  }
+
  private:
+  const AsyncMcServerWorkerOptions& options_;
+
   folly::AsyncTransportWrapper::UniquePtr transport_;
   folly::EventBase& eventBase_;
   std::shared_ptr<McServerOnRequest> onRequest_;
   StateCallback& stateCb_;
-  AsyncMcServerWorkerOptions options_;
 
   // Debug fifo fields
   ConnectionFifo debugFifo_;
@@ -189,13 +199,12 @@ class McServerSession : public folly::DelayedDestruction,
   std::pair<void*, size_t> curBuffer_;
 
   // All writes to be written at the end of the loop in a single batch.
-  std::unique_ptr<WriteBufferIntrusiveList> pendingWrites_;
+  WriteBuffer::List pendingWrites_;
 
   /**
    * Queue of write buffers.
-   * Only initialized after we know the protocol (see ensureWriteBufs())
    */
-  std::unique_ptr<WriteBufferQueue> writeBufs_;
+  WriteBufferQueue writeBufs_;
 
   /**
    * True iff SendWritesCallback has been scheduled.
@@ -217,7 +226,7 @@ class McServerSession : public folly::DelayedDestruction,
 
   struct SendWritesCallback : public folly::EventBase::LoopCallback {
     explicit SendWritesCallback(McServerSession& session) : session_(session) {}
-    void runLoopCallback() noexcept override final {
+    void runLoopCallback() noexcept final {
       session_.sendWrites();
     }
     McServerSession& session_;
@@ -263,6 +272,8 @@ class McServerSession : public folly::DelayedDestruction,
 
   void* userCtxt_{nullptr};
 
+  std::unique_ptr<folly::AsyncTimeout> goAwayTimeout_;
+
   /**
    * pause()/resume() reads from the socket (TODO: does not affect the already
    * read buffer - requests in it will still be processed).
@@ -293,10 +304,10 @@ class McServerSession : public folly::DelayedDestruction,
   void processMultiOpEnd();
 
   /* TAsyncTransport's readCallback */
-  void getReadBuffer(void** bufReturn, size_t* lenReturn) override final;
-  void readDataAvailable(size_t len) noexcept override final;
-  void readEOF() noexcept override final;
-  void readErr(const folly::AsyncSocketException& ex) noexcept override final;
+  void getReadBuffer(void** bufReturn, size_t* lenReturn) final;
+  void readDataAvailable(size_t len) noexcept final;
+  void readEOF() noexcept final;
+  void readErr(const folly::AsyncSocketException& ex) noexcept final;
 
   /* McParser's callback if ASCII request is read into a typed request */
   template <class Request>
@@ -310,6 +321,8 @@ class McServerSession : public folly::DelayedDestruction,
   void caretRequestReady(
       const UmbrellaMessageInfo& headerInfo,
       const folly::IOBuf& reqBody);
+
+  void processConnectionControlMessage(const UmbrellaMessageInfo& headerInfo);
 
   void parseError(mc_res_t result, folly::StringPiece reason);
 
@@ -332,34 +345,25 @@ class McServerSession : public folly::DelayedDestruction,
 
   void multiOpEnd();
 
-  /**
-   * Must be called after parser has detected the protocol (i.e.
-   * at least one request was processed).
-   * Closes the session on protocol error
-   * @return True if writeBufs_ has value after this call,
-   *         False on any protocol error.
-   */
-  void ensureWriteBufs();
-
   void queueWrite(std::unique_ptr<WriteBuffer> wb);
 
   void completeWrite();
 
   /* TAsyncTransport's writeCallback */
-  void writeSuccess() noexcept override final;
+  void writeSuccess() noexcept final;
   void writeErr(
       size_t bytesWritten,
-      const folly::AsyncSocketException& ex) noexcept override final;
+      const folly::AsyncSocketException& ex) noexcept final;
 
   /* AsyncSSLSocket::HandshakeCB interface */
   bool handshakeVer(
       folly::AsyncSSLSocket* sock,
       bool preverifyOk,
-      X509_STORE_CTX* ctx) noexcept override final;
-  void handshakeSuc(folly::AsyncSSLSocket* sock) noexcept override final;
+      X509_STORE_CTX* ctx) noexcept final;
+  void handshakeSuc(folly::AsyncSSLSocket* sock) noexcept final;
   void handshakeErr(
       folly::AsyncSSLSocket* sock,
-      const folly::AsyncSocketException& ex) noexcept override final;
+      const folly::AsyncSocketException& ex) noexcept final;
 
   void onTransactionStarted(bool isSubRequest);
   void onTransactionCompleted(bool isSubRequest);
@@ -378,7 +382,7 @@ class McServerSession : public folly::DelayedDestruction,
       folly::AsyncTransportWrapper::UniquePtr transport,
       std::shared_ptr<McServerOnRequest> cb,
       StateCallback& stateCb,
-      AsyncMcServerWorkerOptions options,
+      const AsyncMcServerWorkerOptions& options,
       void* userCtxt,
       const CompressionCodecMap* codecMap);
 
@@ -388,7 +392,7 @@ class McServerSession : public folly::DelayedDestruction,
   friend class McServerRequestContext;
   friend class ServerMcParser<McServerSession>;
 };
-}
-} // facebook::memcache
+} // memcache
+} // facebook
 
 #include "McServerSession-inl.h"

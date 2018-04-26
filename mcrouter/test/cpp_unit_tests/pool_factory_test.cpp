@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2015-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include <stdexcept>
@@ -30,7 +28,7 @@ class MockConfigApi : public ConfigApiIf {
       : pools_(std::move(pools)) {}
 
   bool get(ConfigType type, const std::string& path, std::string& contents)
-      override final {
+      final {
     ++getCalls_;
     if (type != ConfigType::Pool) {
       return false;
@@ -43,7 +41,7 @@ class MockConfigApi : public ConfigApiIf {
     return false;
   }
 
-  bool getConfigFile(std::string& config, std::string& path) override final {
+  bool getConfigFile(std::string& config, std::string& path) final {
     config = "{}";
     path = "{}";
     return true;

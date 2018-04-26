@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2015-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -25,8 +23,8 @@ inline bool isRequestTypeId(uint32_t typeId) {
 }
 } // detail
 
-template <class Callback>
-void ClientServerMcParser<Callback>::parse(
+template <class Callback, class RequestList>
+void ClientServerMcParser<Callback, RequestList>::parse(
     folly::ByteRange data,
     uint32_t typeId,
     bool isFirstPacket) {

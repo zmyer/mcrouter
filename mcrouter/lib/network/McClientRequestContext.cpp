@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2015-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "McClientRequestContext.h"
@@ -14,9 +12,11 @@ namespace memcache {
 
 constexpr size_t kSerializedRequestContextLength = 1024;
 
-void McClientRequestContextBase::replyError(mc_res_t result) {
+void McClientRequestContextBase::replyError(
+    mc_res_t result,
+    folly::StringPiece errorMessage) {
   assert(state() == ReqState::NONE);
-  replyErrorImpl(result);
+  replyErrorImpl(result, errorMessage);
   setState(ReqState::COMPLETE);
   baton_.post();
 }
@@ -69,7 +69,9 @@ void McClientRequestContextBase::fireStateChangeCallbacks(
 }
 
 void McClientRequestContextBase::scheduleTimeout() {
-  batonTimeoutHandler_.scheduleTimeout(batonWaitTimeout_);
+  if (state() != ReqState::COMPLETE) {
+    batonTimeoutHandler_.scheduleTimeout(batonWaitTimeout_);
+  }
 }
 
 McClientRequestContextBase::~McClientRequestContextBase() {
@@ -102,16 +104,20 @@ size_t McClientRequestContextQueue::getInflightRequestCount() const noexcept {
   return repliedQueue_.size() + writeQueue_.size() + pendingReplyQueue_.size();
 }
 
-void McClientRequestContextQueue::failAllSent(mc_res_t error) {
+void McClientRequestContextQueue::failAllSent(
+    mc_res_t error,
+    folly::StringPiece errorMessage) {
   clearStoredInitializers();
-  failQueue(pendingReplyQueue_, error);
+  failQueue(pendingReplyQueue_, error, errorMessage);
 }
 
-void McClientRequestContextQueue::failAllPending(mc_res_t error) {
+void McClientRequestContextQueue::failAllPending(
+    mc_res_t error,
+    folly::StringPiece errorMessage) {
   assert(pendingReplyQueue_.empty());
   assert(writeQueue_.empty());
   assert(repliedQueue_.empty());
-  failQueue(pendingQueue_, error);
+  failQueue(pendingQueue_, error, errorMessage);
 }
 
 void McClientRequestContextQueue::clearStoredInitializers() {
@@ -138,6 +144,10 @@ void McClientRequestContextQueue::markAsPending(
     }
     set_.insert(req);
   }
+}
+
+McClientRequestContextBase& McClientRequestContextQueue::peekNextPending() {
+  return pendingQueue_.front();
 }
 
 McClientRequestContextBase& McClientRequestContextQueue::markNextAsSending() {
@@ -167,6 +177,8 @@ McClientRequestContextBase& McClientRequestContextQueue::markNextAsSent() {
       timedOutInitializers_.push(req.initializer_);
     }
     req.canceled();
+  } else if (req.state() == State::COMPLETE) {
+    req.baton_.post();
   } else {
     assert(req.state() == State::WRITE_QUEUE);
     req.setState(State::PENDING_REPLY_QUEUE);
@@ -177,13 +189,14 @@ McClientRequestContextBase& McClientRequestContextQueue::markNextAsSent() {
 
 void McClientRequestContextQueue::failQueue(
     McClientRequestContextBase::Queue& queue,
-    mc_res_t error) {
+    mc_res_t error,
+    folly::StringPiece errorMessage) {
   while (!queue.empty()) {
     auto& req = queue.front();
     queue.pop_front();
     removeFromSet(req);
     req.setState(State::NONE);
-    req.replyError(error);
+    req.replyError(error, errorMessage);
   }
 }
 

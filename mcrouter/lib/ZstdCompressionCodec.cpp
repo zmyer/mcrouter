@@ -1,15 +1,13 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "ZstdCompressionCodec.h"
 
-#if FOLLY_HAVE_LIBZSTD
+#if FOLLY_HAVE_LIBZSTD && !defined(DISABLE_COMPRESSION)
 
 namespace facebook {
 namespace memcache {
@@ -58,11 +56,11 @@ std::unique_ptr<folly::IOBuf> ZstdCompressionCodec::compress(
   size_t compressBound = ZSTD_compressBound(bytes.size());
   auto buffer = folly::IOBuf::create(compressBound);
 
-  int compressedSize = ZSTD_compress_usingCDict(
+  size_t const compressedSize = ZSTD_compress_usingCDict(
       zstdCContext_.get(),
-      reinterpret_cast<char*>(buffer->writableTail()),
+      buffer->writableTail(),
       compressBound,
-      reinterpret_cast<const char*>(bytes.data()),
+      bytes.data(),
       bytes.size(),
       zstdCDict_.get());
 
@@ -85,20 +83,21 @@ std::unique_ptr<folly::IOBuf> ZstdCompressionCodec::uncompress(
   auto bytes = data.coalesce();
   auto buffer = folly::IOBuf::create(uncompressedLength);
 
-  int bytesWritten = ZSTD_decompress_usingDDict(
+  size_t const bytesWritten = ZSTD_decompress_usingDDict(
       zstdDContext_.get(),
-      reinterpret_cast<char*>(buffer->writableTail()),
+      buffer->writableTail(),
       buffer->capacity(),
-      reinterpret_cast<const char*>(bytes.data()),
+      bytes.data(),
       bytes.size(),
       zstdDDict_.get());
 
-  assert(ZSTD_isError(bytesWritten) || bytesWritten == uncompressedLength);
   if (ZSTD_isError(bytesWritten)) {
     throw std::runtime_error(folly::sformat(
         "ZSTD codec: decompression returned invalid value. Error: {} ",
         ZSTD_getErrorName(bytesWritten)));
   }
+
+  assert(bytesWritten == uncompressedLength);
 
   buffer->append(bytesWritten);
   return buffer;
@@ -106,4 +105,4 @@ std::unique_ptr<folly::IOBuf> ZstdCompressionCodec::uncompress(
 
 } // memcache
 } // facebook
-#endif // FOLLY_HAVE_LIBZSTD
+#endif // FOLLY_HAVE_LIBZSTD && !defined(DISABLE_COMPRESSION)

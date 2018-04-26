@@ -1,20 +1,21 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "UmbrellaProtocol.h"
 
-#include <folly/Bits.h>
+#include <folly/Expected.h>
 #include <folly/GroupVarint.h>
+#include <folly/Range.h>
 #include <folly/Varint.h>
 #include <folly/io/IOBuf.h>
+#include <folly/lang/Bits.h>
 
 #include "mcrouter/lib/mc/umbrella.h"
+#include "mcrouter/lib/network/ServerLoad.h"
 
 #ifndef LIBMC_FBTRACE_DISABLE
 #include "mcrouter/lib/mc/mc_fbtrace_info.h"
@@ -69,17 +70,21 @@ bool umbrellaGetTagValue(
 }
 
 void resetAdditionalFields(UmbrellaMessageInfo& info) {
-  info.traceId = 0;
+  info.traceId = {0, 0};
   info.supportedCodecsFirstId = 0;
   info.supportedCodecsSize = 0;
   info.usedCodecId = 0;
   info.uncompressedBodySize = 0;
   info.dropProbability = 0;
+  info.serverLoad = ServerLoad::zero();
 }
 
 size_t getNumAdditionalFields(const UmbrellaMessageInfo& info) {
   size_t nAdditionalFields = 0;
-  if (info.traceId != 0) {
+  if (info.traceId.first != 0) {
+    ++nAdditionalFields;
+  }
+  if (info.traceId.second != 0) {
     ++nAdditionalFields;
   }
   if (info.supportedCodecsFirstId != 0) {
@@ -95,6 +100,9 @@ size_t getNumAdditionalFields(const UmbrellaMessageInfo& info) {
     ++nAdditionalFields;
   }
   if (info.dropProbability != 0) {
+    ++nAdditionalFields;
+  }
+  if (!info.serverLoad.isZero()) {
     ++nAdditionalFields;
   }
   return nAdditionalFields;
@@ -122,7 +130,9 @@ size_t serializeAdditionalFields(
   uint8_t* buf = destination;
 
   buf += serializeAdditionalFieldIfNonZero(
-      buf, CaretAdditionalFieldType::TRACE_ID, info.traceId);
+      buf, CaretAdditionalFieldType::TRACE_ID, info.traceId.first);
+  buf += serializeAdditionalFieldIfNonZero(
+      buf, CaretAdditionalFieldType::TRACE_NODE_ID, info.traceId.second);
   buf += serializeAdditionalFieldIfNonZero(
       buf,
       CaretAdditionalFieldType::SUPPORTED_CODECS_FIRST_ID,
@@ -139,6 +149,8 @@ size_t serializeAdditionalFields(
       info.uncompressedBodySize);
   buf += serializeAdditionalFieldIfNonZero(
       buf, CaretAdditionalFieldType::DROP_PROBABILITY, info.dropProbability);
+  buf += serializeAdditionalFieldIfNonZero(
+      buf, CaretAdditionalFieldType::SERVER_LOAD, info.serverLoad.raw());
 
   return buf - destination;
 }
@@ -219,40 +231,52 @@ UmbrellaParseStatus caretParseHeader(
   // Additional fields are sequence of (key,value) pairs
   resetAdditionalFields(headerInfo);
   for (uint32_t i = 0; i < additionalFields; i++) {
-    try {
-      uint64_t fieldType = folly::decodeVarint(range);
-      uint64_t fieldValue = folly::decodeVarint(range);
-
-      if (fieldType >
-          static_cast<uint64_t>(CaretAdditionalFieldType::DROP_PROBABILITY)) {
-        // Additional Field Type not recognized, ignore.
-        continue;
-      }
-
-      switch (static_cast<CaretAdditionalFieldType>(fieldType)) {
-        case CaretAdditionalFieldType::TRACE_ID:
-          headerInfo.traceId = fieldValue;
-          break;
-        case CaretAdditionalFieldType::SUPPORTED_CODECS_FIRST_ID:
-          headerInfo.supportedCodecsFirstId = fieldValue;
-          break;
-        case CaretAdditionalFieldType::SUPPORTED_CODECS_SIZE:
-          headerInfo.supportedCodecsSize = fieldValue;
-          break;
-        case CaretAdditionalFieldType::USED_CODEC_ID:
-          headerInfo.usedCodecId = fieldValue;
-          break;
-        case CaretAdditionalFieldType::UNCOMPRESSED_BODY_SIZE:
-          headerInfo.uncompressedBodySize = fieldValue;
-          break;
-        case CaretAdditionalFieldType::DROP_PROBABILITY:
-          headerInfo.dropProbability = fieldValue;
-          break;
-      }
-    } catch (const std::invalid_argument& e) {
-      // buffer was not sufficient for additional fields
+    size_t fieldType;
+    if (auto maybeFieldType = folly::tryDecodeVarint(range)) {
+      fieldType = *maybeFieldType;
+    } else {
       return UmbrellaParseStatus::NOT_ENOUGH_DATA;
     }
+
+    size_t fieldValue;
+    if (auto maybeFieldValue = folly::tryDecodeVarint(range)) {
+      fieldValue = *maybeFieldValue;
+    } else {
+      return UmbrellaParseStatus::NOT_ENOUGH_DATA;
+    }
+
+    if (fieldType >
+        static_cast<uint64_t>(CaretAdditionalFieldType::SERVER_LOAD)) {
+      // Additional Field Type not recognized, ignore.
+      continue;
+    }
+
+    switch (static_cast<CaretAdditionalFieldType>(fieldType)) {
+      case CaretAdditionalFieldType::TRACE_ID:
+        headerInfo.traceId.first = fieldValue;
+        break;
+      case CaretAdditionalFieldType::TRACE_NODE_ID:
+        headerInfo.traceId.second = fieldValue;
+        break;
+      case CaretAdditionalFieldType::SUPPORTED_CODECS_FIRST_ID:
+        headerInfo.supportedCodecsFirstId = fieldValue;
+        break;
+      case CaretAdditionalFieldType::SUPPORTED_CODECS_SIZE:
+        headerInfo.supportedCodecsSize = fieldValue;
+        break;
+      case CaretAdditionalFieldType::USED_CODEC_ID:
+        headerInfo.usedCodecId = fieldValue;
+        break;
+      case CaretAdditionalFieldType::UNCOMPRESSED_BODY_SIZE:
+        headerInfo.uncompressedBodySize = fieldValue;
+        break;
+      case CaretAdditionalFieldType::DROP_PROBABILITY:
+        headerInfo.dropProbability = fieldValue;
+        break;
+      case CaretAdditionalFieldType::SERVER_LOAD:
+        headerInfo.serverLoad = ServerLoad(fieldValue);
+        break;
+      }
   }
 
   headerInfo.headerSize = range.cbegin() - buf;

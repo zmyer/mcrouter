@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "util.h"
@@ -22,7 +20,7 @@
 #include <folly/FileUtil.h>
 #include <folly/Random.h>
 #include <folly/ScopeGuard.h>
-#include <folly/SpookyHashV2.h>
+#include <folly/hash/SpookyHashV2.h>
 #include <folly/json.h>
 
 namespace facebook {
@@ -201,16 +199,20 @@ bool ensureDirExistsAndWritable(const std::string& path) {
     return false;
   }
 
+  return ensureHasPermission(path, 0777);
+}
+
+bool ensureHasPermission(const std::string& path, mode_t mode) {
   struct stat st;
   if (::stat(path.c_str(), &st) != 0) {
     return false;
   }
 
-  if ((st.st_mode & 0777) == 0777) {
+  if ((st.st_mode & mode) == mode) {
     return true;
   }
 
-  if (::chmod(path.c_str(), 0777) != 0) {
+  if (::chmod(path.c_str(), mode) != 0) {
     return false;
   }
 

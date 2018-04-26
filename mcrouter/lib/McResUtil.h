@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -157,7 +155,7 @@ inline bool isConnectTimeoutResult(const mc_res_t result) {
  * if the data reached the server or not.
  */
 inline bool isDataTimeoutResult(const mc_res_t result) {
-  return result == mc_res_timeout || result == mc_res_remote_error;
+  return result == mc_res_timeout;
 }
 
 /**

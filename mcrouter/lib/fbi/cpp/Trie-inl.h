@@ -1,19 +1,17 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
 
+#include <memory>
+
 #include <boost/iterator/iterator_facade.hpp>
 
 #include <glog/logging.h>
-
-#include <folly/Memory.h>
 
 namespace facebook {
 namespace memcache {
@@ -21,12 +19,12 @@ namespace memcache {
 template <class Value>
 Trie<Value>::Trie(const Trie& other) : parent_(other.parent_), c_(other.c_) {
   if (other.value_) {
-    value_ = folly::make_unique<value_type>(*other.value_);
+    value_ = std::make_unique<value_type>(*other.value_);
   }
 
-  for (auto edge = 0; edge < kNumChars; ++edge) {
+  for (size_t edge = 0; edge < kNumChars; ++edge) {
     if (other.next_[edge]) {
-      next_[edge] = folly::make_unique<Trie>(*other.next_[edge]);
+      next_[edge] = std::make_unique<Trie>(*other.next_[edge]);
       next_[edge]->parent_ = this;
     }
   }
@@ -38,7 +36,7 @@ Trie<Value>::Trie(Trie&& other) noexcept
       value_(std::move(other.value_)),
       parent_(other.parent_),
       c_(other.c_) {
-  for (auto edge = 0; edge < kNumChars; ++edge) {
+  for (size_t edge = 0; edge < kNumChars; ++edge) {
     if (next_[edge]) {
       next_[edge]->parent_ = this;
     }
@@ -58,7 +56,7 @@ Trie<Value>& Trie<Value>::operator=(Trie&& other) {
   parent_ = other.parent_;
   c_ = other.c_;
 
-  for (auto edge = 0; edge < kNumChars; ++edge) {
+  for (size_t edge = 0; edge < kNumChars; ++edge) {
     if (next_[edge]) {
       next_[edge]->parent_ = this;
     }
@@ -102,7 +100,7 @@ void Trie<Value>::emplace(folly::StringPiece key, Value val) {
     for (auto ci : steps) {
       auto& nx = node->next_[ci];
       if (!nx) {
-        nx = folly::make_unique<Trie>();
+        nx = std::make_unique<Trie>();
         nx->parent_ = node;
         nx->c_ = ci;
       }
@@ -110,7 +108,7 @@ void Trie<Value>::emplace(folly::StringPiece key, Value val) {
     }
   }
 
-  node->value_ = folly::make_unique<value_type>(key.str(), std::move(val));
+  node->value_ = std::make_unique<value_type>(key.str(), std::move(val));
 }
 
 template <class Value>
@@ -246,5 +244,6 @@ class Trie<Value>::iterator_base
     return *t_->value_;
   }
 };
-}
-} // facebook::memcache
+
+} // memcache
+} // facebook

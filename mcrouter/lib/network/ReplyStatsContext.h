@@ -1,13 +1,13 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
+
+#include "mcrouter/lib/network/ServerLoad.h"
 
 namespace facebook {
 namespace memcache {
@@ -24,14 +24,17 @@ struct ReplyStatsContext {
   ReplyStatsContext(
       uint32_t usedCodecId_,
       uint32_t replySizeBeforeCompression_,
-      uint32_t replySizeAfterCompression_)
+      uint32_t replySizeAfterCompression_,
+      ServerLoad serverLoad_)
       : usedCodecId(usedCodecId_),
         replySizeBeforeCompression(replySizeBeforeCompression_),
-        replySizeAfterCompression(replySizeAfterCompression_) {}
+        replySizeAfterCompression(replySizeAfterCompression_),
+        serverLoad(serverLoad_) {}
 
   uint32_t usedCodecId{0};
   uint32_t replySizeBeforeCompression{0};
   uint32_t replySizeAfterCompression{0};
+  ServerLoad serverLoad{0};
 };
 
 } // memcache

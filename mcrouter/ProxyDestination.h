@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -14,21 +12,24 @@
 #include <string>
 
 #include <folly/IntrusiveList.h>
+#include <folly/Range.h>
 #include <folly/SpinLock.h>
 
-#include "mcrouter/AsyncTimer.h"
 #include "mcrouter/ExponentialSmoothData.h"
 #include "mcrouter/TkoLog.h"
 #include "mcrouter/config.h"
-#include "mcrouter/lib/McOperation.h"
+#include "mcrouter/lib/Operation.h"
 #include "mcrouter/lib/mc/msg.h"
-#include "mcrouter/lib/network/AccessPoint.h"
-#include "mcrouter/lib/network/AsyncMcClient.h"
-#include "mcrouter/lib/network/gen/Memcache.h"
+
+namespace folly {
+class AsyncTimeout;
+} // namespace folly
 
 namespace facebook {
 namespace memcache {
 
+struct AccessPoint;
+class AsyncMcClient;
 struct ReplyStatsContext;
 
 namespace mcrouter {
@@ -62,7 +63,7 @@ class ProxyDestination {
     double retransPerKByte{0.0};
   };
 
-  ProxyBase* proxy{nullptr}; ///< for convenience
+  ProxyBase& proxy; // for convenience
 
   std::shared_ptr<TkoTracker> tracker;
 
@@ -101,22 +102,24 @@ class ProxyDestination {
 
   void updateShortestTimeout(std::chrono::milliseconds timeout);
 
-  void updatePoolName(std::string poolName) {
-    poolName_ = std::move(poolName);
-  }
+  /**
+   * Gracefully closes the connection, allowing it to properly drain if
+   * possible.
+   */
+  void closeGracefully();
 
  private:
-  static const uint64_t kDeadBeef = 0xdeadbeefdeadbeefULL;
-
   std::unique_ptr<AsyncMcClient> client_;
-  std::shared_ptr<const AccessPoint> accessPoint_;
-  mutable folly::SpinLock clientLock_; // AsyncMcClient lock for stats threads.
+  const std::shared_ptr<const AccessPoint> accessPoint_;
+  // Ensure proxy thread doesn't reset AsyncMcClient
+  // while config and stats threads may be accessing it
+  mutable folly::SpinLock clientLock_;
 
   // Shortest timeout among all DestinationRoutes using this destination
   std::chrono::milliseconds shortestTimeout_{0};
   const uint64_t qosClass_{0};
   const uint64_t qosPath_{0};
-  uint64_t magic_{0}; ///< to allow asserts that pdstn is still alive
+  const folly::StringPiece routerInfoName_;
 
   Stats stats_;
 
@@ -125,19 +128,19 @@ class ProxyDestination {
   uint64_t lastConnCloseCycles_{0}; // Cycles when connection was last closed
 
   int probe_delay_next_ms{0};
-  std::unique_ptr<McVersionRequest> probe_req;
-  std::string poolName_;
+  bool probeInflight_{false};
   // The string is stored in ProxyDestinationMap::destinations_
   folly::StringPiece pdstnKey_; ///< consists of ap, server_timeout
 
-  AsyncTimer<ProxyDestination> probeTimer_;
+  std::unique_ptr<folly::AsyncTimeout> probeTimer_;
 
   static std::shared_ptr<ProxyDestination> create(
       ProxyBase& proxy,
       std::shared_ptr<AccessPoint> ap,
       std::chrono::milliseconds timeout,
       uint64_t qosClass,
-      uint64_t qosPath);
+      uint64_t qosPath,
+      folly::StringPiece routerInfoName);
 
   void setState(State st);
 
@@ -162,13 +165,16 @@ class ProxyDestination {
       std::shared_ptr<AccessPoint> ap,
       std::chrono::milliseconds timeout,
       uint64_t qosClass,
-      uint64_t qosPath);
+      uint64_t qosPath,
+      folly::StringPiece routerInfoName);
 
   void onTkoEvent(TkoLogEvent event, mc_res_t result) const;
 
-  void timerCallback();
-
   void handleRxmittingConnection();
+
+  void onTransitionToState(State state);
+  void onTransitionFromState(State state);
+  void onTransitionImpl(State state, bool to);
 
   void* stateList_{nullptr};
   folly::IntrusiveListHook stateListHook_;
@@ -176,10 +182,10 @@ class ProxyDestination {
   std::weak_ptr<ProxyDestination> selfPtr_;
 
   friend class ProxyDestinationMap;
-  friend class AsyncTimer<ProxyDestination>;
 };
-}
-}
-} // facebook::memcache::mcrouter
+
+} // namespace mcrouter
+} // namespace memcache
+} // namespace facebook
 
 #include "ProxyDestination-inl.h"

@@ -1,20 +1,18 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "McServerSession.h"
 
 #include <memory>
 
-#include <folly/Memory.h>
 #include <folly/small_vector.h>
 
 #include "mcrouter/lib/debug/FifoManager.h"
+#include "mcrouter/lib/network/McSSLUtil.h"
 #include "mcrouter/lib/network/McServerRequestContext.h"
 #include "mcrouter/lib/network/MultiOpParent.h"
 #include "mcrouter/lib/network/WriteBuffer.h"
@@ -26,11 +24,12 @@ namespace {
 
 ConnectionFifo getDebugFifo(
     const std::string& path,
-    const folly::AsyncTransportWrapper* transport) {
+    const folly::AsyncTransportWrapper* transport,
+    const std::string& requestHandlerName) {
   if (!path.empty()) {
     if (auto fifoManager = FifoManager::getInstance()) {
       if (auto fifo = fifoManager->fetchThreadLocal(path)) {
-        return ConnectionFifo(std::move(fifo), transport);
+        return ConnectionFifo(std::move(fifo), transport, requestHandlerName);
       }
     }
   }
@@ -45,14 +44,14 @@ McServerSession& McServerSession::create(
     folly::AsyncTransportWrapper::UniquePtr transport,
     std::shared_ptr<McServerOnRequest> cb,
     StateCallback& stateCb,
-    AsyncMcServerWorkerOptions options,
+    const AsyncMcServerWorkerOptions& options,
     void* userCtxt,
     const CompressionCodecMap* codecMap) {
   auto ptr = new McServerSession(
       std::move(transport),
       std::move(cb),
       stateCb,
-      std::move(options),
+      options,
       userCtxt,
       codecMap);
 
@@ -72,16 +71,18 @@ McServerSession::McServerSession(
     folly::AsyncTransportWrapper::UniquePtr transport,
     std::shared_ptr<McServerOnRequest> cb,
     StateCallback& stateCb,
-    AsyncMcServerWorkerOptions options,
+    const AsyncMcServerWorkerOptions& options,
     void* userCtxt,
     const CompressionCodecMap* codecMap)
-    : transport_(std::move(transport)),
+    : options_(options),
+      transport_(std::move(transport)),
       eventBase_(*transport_->getEventBase()),
       onRequest_(std::move(cb)),
       stateCb_(stateCb),
-      options_(std::move(options)),
-      debugFifo_(getDebugFifo(options_.debugFifoPath, transport_.get())),
-      pendingWrites_(folly::make_unique<WriteBufferIntrusiveList>()),
+      debugFifo_(getDebugFifo(
+          options_.debugFifoPath,
+          transport_.get(),
+          onRequest_->name())),
       sendWritesCallback_(*this),
       compressionCodecMap_(codecMap),
       parser_(
@@ -131,7 +132,7 @@ void McServerSession::onTransactionStarted(bool isSubRequest) {
 
 void McServerSession::checkClosed() {
   if (!inFlight_) {
-    assert(pendingWrites_->empty());
+    assert(pendingWrites_.empty());
 
     if (state_ == CLOSING) {
       /* It's possible to call close() more than once from the same stack.
@@ -190,8 +191,25 @@ void McServerSession::processMultiOpEnd() {
   currentMultiop_.reset();
 }
 
+void McServerSession::beginClose(folly::StringPiece reason) {
+  if (options_.goAwayTimeout.count() == 0 ||
+      parser_.protocol() != mc_caret_protocol) {
+    close();
+  } else {
+    McServerRequestContext ctx(*this, kCaretConnectionControlReqId);
+    GoAwayRequest goAway;
+    goAway.reason() = reason.str();
+    McServerRequestContext::reply(std::move(ctx), std::move(goAway));
+    goAwayTimeout_ = folly::AsyncTimeout::schedule(
+        options_.goAwayTimeout, eventBase_, [this]() noexcept { close(); });
+  }
+}
+
 void McServerSession::close() {
   DestructorGuard dg(this);
+
+  // Reset timeout if set, since we're shutting down anyway.
+  goAwayTimeout_ = nullptr;
 
   // Regardless of the reason we're closing, we should immediately stop reading
   // from the socket or we may get into invalid state.
@@ -230,7 +248,7 @@ void McServerSession::readEOF() noexcept {
   close();
 }
 
-void McServerSession::readErr(const folly::AsyncSocketException& ex) noexcept {
+void McServerSession::readErr(const folly::AsyncSocketException&) noexcept {
   close();
 }
 
@@ -299,12 +317,12 @@ void McServerSession::caretRequestReady(
 
   updateCompressionCodecIdRange(headerInfo);
 
-  McServerRequestContext ctx(
-      *this,
-      headerInfo.reqId,
-      false /* noReply */,
-      nullptr /* multiOpParent */,
-      false /* isEndContext */);
+  if (headerInfo.reqId == kCaretConnectionControlReqId) {
+    processConnectionControlMessage(headerInfo);
+    return;
+  }
+
+  McServerRequestContext ctx(*this, headerInfo.reqId);
 
   if (McVersionRequest::typeId == headerInfo.typeId &&
       options_.defaultVersionHandler) {
@@ -321,6 +339,22 @@ void McServerSession::caretRequestReady(
       ctx.replied_ = true;
       throw;
     }
+  }
+}
+
+void McServerSession::processConnectionControlMessage(
+    const UmbrellaMessageInfo& headerInfo) {
+  DestructorGuard dg(this);
+  switch (headerInfo.typeId) {
+    case GoAwayAcknowledgement::typeId: {
+      // Client acknowledged GoAway, no new requests should be received, start
+      // closing the connection.
+      close();
+      break;
+    }
+    default:
+      // Unknown connection controll message, ignore it.
+      break;
   }
 }
 
@@ -349,12 +383,6 @@ void McServerSession::parseError(mc_res_t result, folly::StringPiece reason) {
   close();
 }
 
-void McServerSession::ensureWriteBufs() {
-  if (writeBufs_ == nullptr) {
-    writeBufs_ = folly::make_unique<WriteBufferQueue>(parser_.protocol());
-  }
-}
-
 void McServerSession::queueWrite(std::unique_ptr<WriteBuffer> wb) {
   if (wb == nullptr) {
     return;
@@ -365,15 +393,15 @@ void McServerSession::queueWrite(std::unique_ptr<WriteBuffer> wb) {
     }
     const struct iovec* iovs = wb->getIovsBegin();
     size_t iovCount = wb->getIovsCount();
-    writeBufs_->push(std::move(wb));
+    writeBufs_.push(std::move(wb));
     transport_->writev(this, iovs, iovCount);
-    if (!writeBufs_->empty()) {
+    if (!writeBufs_.empty()) {
       /* We only need to pause if the sendmsg() call didn't write everything
          in one go */
       pause(PAUSE_WRITE);
     }
   } else {
-    pendingWrites_->pushBack(std::move(wb));
+    pendingWrites_.pushBack(std::move(wb));
 
     if (!writeScheduled_) {
       eventBase_.runInLoop(&sendWritesCallback_, /* thisIteration= */ true);
@@ -388,8 +416,8 @@ void McServerSession::sendWrites() {
   writeScheduled_ = false;
 
   folly::small_vector<struct iovec, kIovecVectorSize> iovs;
-  while (!pendingWrites_->empty()) {
-    auto wb = pendingWrites_->popFront();
+  while (!pendingWrites_.empty()) {
+    auto wb = pendingWrites_.popFront();
     if (!wb->noReply()) {
       if (UNLIKELY(debugFifo_.isConnected())) {
         writeToDebugFifo(wb.get());
@@ -399,10 +427,10 @@ void McServerSession::sendWrites() {
           wb->getIovsBegin(),
           wb->getIovsBegin() + wb->getIovsCount());
     }
-    if (pendingWrites_->empty()) {
+    if (pendingWrites_.empty()) {
       wb->markEndOfBatch();
     }
-    writeBufs_->push(std::move(wb));
+    writeBufs_.push(std::move(wb));
   }
 
   transport_->writev(this, iovs.data(), iovs.size());
@@ -427,15 +455,14 @@ void McServerSession::writeToDebugFifo(const WriteBuffer* wb) noexcept {
 }
 
 void McServerSession::completeWrite() {
-  writeBufs_->pop(!options_.singleWrite /* popBatch */);
+  writeBufs_.pop(!options_.singleWrite /* popBatch */);
 }
 
 void McServerSession::writeSuccess() noexcept {
   DestructorGuard dg(this);
   completeWrite();
 
-  assert(writeBufs_ != nullptr);
-  if (writeBufs_->empty() && state_ == STREAMING) {
+  if (writeBufs_.empty() && state_ == STREAMING) {
     stateCb_.onWriteQuiescence(*this);
     /* No-op if not paused */
     resume(PAUSE_WRITE);
@@ -443,45 +470,18 @@ void McServerSession::writeSuccess() noexcept {
 }
 
 void McServerSession::writeErr(
-    size_t bytesWritten,
-    const folly::AsyncSocketException& ex) noexcept {
+    size_t /* bytesWritten */,
+    const folly::AsyncSocketException&) noexcept {
   DestructorGuard dg(this);
   completeWrite();
   close();
 }
 
 bool McServerSession::handshakeVer(
-    folly::AsyncSSLSocket*,
+    folly::AsyncSSLSocket* sock,
     bool preverifyOk,
     X509_STORE_CTX* ctx) noexcept {
-  if (!preverifyOk) {
-    return false;
-  }
-  // XXX I'm assuming that this will be the case as a result of
-  // preverifyOk being true
-  DCHECK(X509_STORE_CTX_get_error(ctx) == X509_V_OK);
-
-  // So the interesting thing is that this always returns the depth of
-  // the cert it's asking you to verify, and the error_ assumes to be
-  // just a poorly named function.
-  auto certDepth = X509_STORE_CTX_get_error_depth(ctx);
-
-  // Depth is numbered from the peer cert going up.  For anything in the
-  // chain, let's just leave it to openssl to figure out it's validity.
-  // We may want to limit the chain depth later though.
-  if (certDepth != 0) {
-    return preverifyOk;
-  }
-
-  auto cert = X509_STORE_CTX_get_current_cert(ctx);
-  sockaddr_storage addrStorage;
-  socklen_t addrLen = 0;
-  if (!folly::ssl::OpenSSLUtils::getPeerAddressFromX509StoreCtx(
-          ctx, &addrStorage, &addrLen)) {
-    return false;
-  }
-  return folly::ssl::OpenSSLUtils::validatePeerCertNames(
-      cert, reinterpret_cast<sockaddr*>(&addrStorage), addrLen);
+  return McSSLUtil::verifySSL(sock, preverifyOk, ctx);
 }
 
 void McServerSession::handshakeSuc(folly::AsyncSSLSocket* sock) noexcept {
@@ -498,6 +498,7 @@ void McServerSession::handshakeSuc(folly::AsyncSSLSocket* sock) noexcept {
       clientCommonName_.assign(std::string(cn, res));
     }
   }
+  McSSLUtil::finalizeServerSSL(transport_.get());
 }
 
 void McServerSession::handshakeErr(

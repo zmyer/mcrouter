@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -16,6 +14,7 @@
 #include <folly/IPAddress.h>
 #include <folly/SocketAddress.h>
 
+#include "mcrouter/lib/network/ServerLoad.h"
 #include "mcrouter/tools/mcpiper/AnsiColorCodeStream.h"
 #include "mcrouter/tools/mcpiper/PrettyFormat.h"
 #include "mcrouter/tools/mcpiper/SnifferParser.h"
@@ -56,6 +55,9 @@ class MessagePrinter {
 
     // Getting raw data in binary format
     bool raw{false};
+
+    // Machine-readable JSON format (has no effect if raw is true)
+    bool script{false};
   };
 
   struct Stats {
@@ -108,7 +110,8 @@ class MessagePrinter {
       const folly::SocketAddress& from,
       const folly::SocketAddress& to,
       mc_protocol_t protocol,
-      int64_t latencyUs);
+      int64_t latencyUs = 0,
+      const ServerLoad& serverLoad = ServerLoad::zero());
 
  private:
   const Options options_;
@@ -155,7 +158,7 @@ class MessagePrinter {
 
   void countStats();
 
-  friend class SnifferParser<MessagePrinter>;
+  friend class SnifferParserBase<MessagePrinter>;
 
   template <class Message>
   StyledString getTypeSpecificAttributes(const Message& msg);
@@ -193,7 +196,8 @@ class MessagePrinter {
       mc_res_t result,
       const std::string& key);
 };
-}
-} // facebook::memcache
+
+} // memcache
+} // facebook
 
 #include "MessagePrinter-inl.h"

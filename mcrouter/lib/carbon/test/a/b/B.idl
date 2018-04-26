@@ -11,12 +11,18 @@ struct SimpleStruct {
   1: int64_t member1;
 };
 
+union SimpleUnion {
+  1: int64_t umember1;
+  2: bool umember2;
+  3: std::string umember3;
+};
+
 request YetAnotherRequest {
-  id: 1;
+  id: 2;
   name: "yet_another";
   reply: YetAnotherReply;
 
-  1: Keys<IOBuf> key;
+  1: carbon::Keys<folly::IOBuf> key;
 };
 
 reply YetAnotherReply {

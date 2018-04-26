@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -46,7 +44,7 @@ typename std::enable_if<
     std::shared_ptr<RouteHandleIf>>::type
 wrapWithBigValueRoute(
     std::shared_ptr<RouteHandleIf> ch,
-    const McrouterOptions& routerOpts) {
+    const McrouterOptions& /* routerOpts */) {
   return std::move(ch);
 }
 
@@ -54,17 +52,17 @@ wrapWithBigValueRoute(
 
 template <class RouterInfo>
 ProxyRoute<RouterInfo>::ProxyRoute(
-    Proxy<RouterInfo>* proxy,
+    Proxy<RouterInfo>& proxy,
     const RouteSelectorMap<typename RouterInfo::RouteHandleIf>& routeSelectors)
     : proxy_(proxy),
       root_(makeRouteHandle<typename RouterInfo::RouteHandleIf, RootRoute>(
           proxy_,
           routeSelectors)) {
-  if (proxy_->getRouterOptions().big_value_split_threshold != 0) {
+  if (proxy_.getRouterOptions().big_value_split_threshold != 0) {
     root_ = detail::wrapWithBigValueRoute(
-        std::move(root_), proxy_->getRouterOptions());
+        std::move(root_), proxy_.getRouterOptions());
   }
-  if (proxy_->getRouterOptions().enable_logging_route) {
+  if (proxy_.getRouterOptions().enable_logging_route) {
     root_ = createLoggingRoute<RouterInfo>(std::move(root_));
   }
 }
@@ -79,7 +77,7 @@ ProxyRoute<RouterInfo>::getAllDestinations() const {
   // include dependecies.
   //
   // Important: keep the shared_ptr alive for the duration of the loop.
-  auto config = proxy_->getConfigUnsafe();
+  auto config = proxy_.getConfigUnsafe();
   for (auto& it : config->getPools()) {
     rh.insert(rh.end(), it.second.begin(), it.second.end());
   }

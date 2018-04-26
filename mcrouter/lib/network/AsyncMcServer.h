@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -17,6 +15,9 @@
 
 #include <sys/socket.h>
 
+#include <folly/SharedMutex.h>
+#include <wangle/ssl/TLSTicketKeySeeds.h>
+
 #include "mcrouter/lib/network/AsyncMcServerWorkerOptions.h"
 #include "mcrouter/lib/network/CongestionController.h"
 
@@ -25,11 +26,16 @@ class EventBase;
 class ScopedEventBaseThread;
 } // folly
 
+namespace wangle {
+class TLSCredProcessor;
+} // wangle
+
 namespace facebook {
 namespace memcache {
 
 class AsyncMcServerWorker;
 class McServerThread;
+class McServerThreadSpawnController;
 
 /**
  * A multithreaded, asynchronous MC protocol server.
@@ -81,6 +87,18 @@ class AsyncMcServer {
     std::string pemCaPath;
 
     /**
+     * Path to JSON file containing old, current, and new seeds used for TLS
+     * ticket key generation.
+     */
+    std::string tlsTicketKeySeedPath;
+
+    /**
+     * TFO settings (for SSL only)
+     */
+    bool tfoEnabledForSsl{false};
+    uint32_t tfoQueueSize{0};
+
+    /**
      * Number of threads to spawn, must be positive.
      */
     size_t numThreads{1};
@@ -91,9 +109,14 @@ class AsyncMcServer {
     AsyncMcServerWorkerOptions worker;
 
     /**
-     * CongestionController-specific options
+     * CPU-based congestion controller.
      */
-    CongestionControllerOptions congestionController;
+    CongestionControllerOptions cpuControllerOpts;
+
+    /**
+     * Memory-based congestion controller.
+     */
+    CongestionControllerOptions memoryControllerOpts;
 
     /**
      * @param globalMaxConns
@@ -168,22 +191,37 @@ class AsyncMcServer {
    */
   void join();
 
+  /**
+   * Getter/setter for seeds to be used to generate keys encrypting TLS tickets.
+   */
+  void setTicketKeySeeds(wangle::TLSTicketKeySeeds seeds);
+  wangle::TLSTicketKeySeeds getTicketKeySeeds() const;
+
  private:
   std::unique_ptr<folly::ScopedEventBaseThread> auxiliaryEvbThread_;
   Options opts_;
+  std::unique_ptr<McServerThreadSpawnController> threadsSpawnController_;
   std::vector<std::unique_ptr<McServerThread>> threads_;
 
-  std::atomic<bool> alive_{true};
+  std::unique_ptr<wangle::TLSCredProcessor> ticketKeySeedPoller_;
+  wangle::TLSTicketKeySeeds tlsTicketKeySeeds_;
+  mutable folly::SharedMutex tlsTicketKeySeedsLock_;
+
   std::function<void()> onShutdown_;
+  std::atomic<bool> alive_{true};
+  bool spawned_{false};
 
   enum class SignalShutdownState : uint64_t { STARTUP, SHUTDOWN, SPAWNED };
   std::atomic<SignalShutdownState> signalShutdownState_{
       SignalShutdownState::STARTUP};
+
+  void startPollingTicketKeySeeds();
 
   AsyncMcServer(const AsyncMcServer&) = delete;
   AsyncMcServer& operator=(const AsyncMcServer&) = delete;
 
   friend class McServerThread;
 };
-}
-} // facebook::memcache
+
+} // memcache
+} // facebook

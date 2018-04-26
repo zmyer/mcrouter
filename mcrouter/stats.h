@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -133,6 +131,9 @@ uint64_t stat_get_uint64(const stat_t*, stat_name_t);
 uint64_t stat_get_config_age(const stat_t* stats, uint64_t now);
 McStatsReply stats_reply(ProxyBase*, folly::StringPiece);
 void prepare_stats(CarbonRouterInstanceBase& router, stat_t* stats);
+void append_pool_stats(
+    CarbonRouterInstanceBase& router,
+    std::vector<stat_t>& stats);
 
 void set_standalone_args(folly::StringPiece args);
 

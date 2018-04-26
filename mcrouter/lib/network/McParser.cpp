@@ -1,24 +1,23 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "McParser.h"
 
 #include <algorithm>
+#include <new>
+#include <utility>
 
-#include <folly/Bits.h>
 #include <folly/Format.h>
-#include <folly/Memory.h>
 #include <folly/ThreadLocal.h>
 #include <folly/experimental/JemallocNodumpAllocator.h>
 #include <folly/io/Cursor.h>
+#include <folly/lang/Bits.h>
 
-#include "mcrouter/lib/cycles/Clocks.h"
+#include "mcrouter/lib/Clocks.h"
 #include "mcrouter/lib/network/UmbrellaProtocol.h"
 
 namespace facebook {
@@ -116,7 +115,7 @@ bool McParser::readUmbrellaOrCaretData() {
   while (readBuffer_.length() > 0) {
     // Parse header
     UmbrellaParseStatus parseStatus;
-    if (protocol_ == mc_umbrella_protocol) {
+    if (protocol_ == mc_umbrella_protocol_DONOTUSE) {
       parseStatus = umbrellaParseHeader(
           readBuffer_.data(), readBuffer_.length(), umMsgInfo_);
     } else {
@@ -142,7 +141,7 @@ bool McParser::readUmbrellaOrCaretData() {
     // Case 1: Entire message (and possibly part of next) is in the buffer
     if (readBuffer_.length() >= messageSize) {
       if (UNLIKELY(debugFifo_ && debugFifo_->isConnected())) {
-        if (protocol_ == mc_umbrella_protocol) {
+        if (protocol_ == mc_umbrella_protocol_DONOTUSE) {
           const auto mc_op = umbrellaDetermineOperation(
               readBuffer_.data(), umMsgInfo_.headerSize);
           umMsgInfo_.typeId = mcOpToRequestTypeId(mc_op);
@@ -158,7 +157,7 @@ bool McParser::readUmbrellaOrCaretData() {
       }
 
       bool cbStatus;
-      if (protocol_ == mc_umbrella_protocol) {
+      if (protocol_ == mc_umbrella_protocol_DONOTUSE) {
         cbStatus = callback_.umMessageReady(umMsgInfo_, readBuffer_);
       } else {
         cbStatus = callback_.caretMessageReady(umMsgInfo_, readBuffer_);
@@ -223,7 +222,8 @@ bool McParser::readDataAvailable(size_t len) {
       outOfOrder_ = false;
     } else {
       assert(
-          protocol_ == mc_umbrella_protocol || protocol_ == mc_caret_protocol);
+          protocol_ == mc_umbrella_protocol_DONOTUSE ||
+          protocol_ == mc_caret_protocol);
       outOfOrder_ = true;
     }
   }
@@ -239,5 +239,6 @@ double McParser::getDropProbability() const {
   return static_cast<double>(umMsgInfo_.dropProbability) /
       kDropProbabilityNormalizer;
 }
-}
-} // facebook::memcache
+
+} // memcache
+} // facebook

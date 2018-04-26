@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -39,15 +37,6 @@ struct ConnectionOptions {
 
   explicit ConnectionOptions(std::shared_ptr<const AccessPoint> ap)
       : accessPoint(std::move(ap)) {}
-
-  /**
-   * For performance testing only.
-   * If this flag is set, each request won't be sent over network, instead it
-   * will be processed by fake transport, that will reply each request with some
-   * basic reply (e.g. STORED, DELETED, or some random string for get requests).
-   * Currently works only for ascii protocol.
-   */
-  bool noNetwork{false};
 
   /**
    * Access point of the destination.
@@ -106,6 +95,13 @@ struct ConnectionOptions {
   std::string debugFifoPath;
 
   /**
+   * Name of the router that owns this connection.
+   * NOTE: Must be be a literal (constexpr), and shouldn't be used
+   * outside of mcrouter.
+   */
+  folly::StringPiece routerInfoName;
+
+  /**
    * enable ssl session caching
    */
   bool sessionCachingEnabled{false};
@@ -120,6 +116,16 @@ struct ConnectionOptions {
    * If nullptr, compression will be disabled.
    */
   const CompressionCodecMap* compressionCodecMap{nullptr};
+
+  /**
+   * Service identity of the destination service when SSL is used.
+   */
+  std::string sslServiceIdentity;
+
+  /**
+   * Whether TFO is enabled for SSL connections
+   */
+  bool tfoEnabledForSsl{false};
 };
 }
 } // facebook::memcache

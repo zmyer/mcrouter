@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2015-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -49,12 +47,13 @@ class ConnectionTracker : public McServerSession::StateCallback {
   /**
    * Creates a new entry in the LRU and places the connection at the front.
    *
+   * @return reference to the created session.
    * @throws std::runtime_exception when fails to create a session.
    */
-  void add(
+  McServerSession& add(
       folly::AsyncTransportWrapper::UniquePtr transport,
       std::shared_ptr<McServerOnRequest> cb,
-      AsyncMcServerWorkerOptions options,
+      const AsyncMcServerWorkerOptions& options,
       void* userCtxt,
       const CompressionCodecMap* compressionCodecMap);
 
@@ -81,10 +80,10 @@ class ConnectionTracker : public McServerSession::StateCallback {
   void evict();
 
   // McServerSession::StateCallback API
-  void onWriteQuiescence(McServerSession& session) override final;
-  void onCloseStart(McServerSession& session) override final;
-  void onCloseFinish(McServerSession& session) override final;
-  void onShutdown() override final;
+  void onWriteQuiescence(McServerSession& session) final;
+  void onCloseStart(McServerSession& session) final;
+  void onCloseFinish(McServerSession& session) final;
+  void onShutdown() final;
 };
 }
 } // facebook::memcache

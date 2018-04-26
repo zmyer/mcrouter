@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "IOBufUtil.h"
@@ -61,8 +59,10 @@ void copyInto(char* raw, const folly::IOBuf& buf) {
   auto cur = &buf;
   auto next = cur->next();
   do {
-    ::memcpy(raw, cur->data(), cur->length());
-    raw += cur->length();
+    if (cur->data()) {
+      ::memcpy(raw, cur->data(), cur->length());
+      raw += cur->length();
+    }
     cur = next;
     next = next->next();
   } while (cur != &buf);

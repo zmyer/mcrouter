@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -13,9 +11,11 @@
 
 #include "mcrouter/lib/network/AsciiSerialized.h"
 #include "mcrouter/lib/network/McSerializedRequest.h"
+#include "mcrouter/lib/network/ServerLoad.h"
 #include "mcrouter/lib/network/gen/Memcache.h"
 #include "mcrouter/tools/mcpiper/Color.h"
 #include "mcrouter/tools/mcpiper/Config.h"
+#include "mcrouter/tools/mcpiper/McPiperVisitor.h"
 #include "mcrouter/tools/mcpiper/Util.h"
 
 namespace facebook {
@@ -30,13 +30,13 @@ typename std::enable_if<M::hasExptime, int32_t>::type getExptime(const M& req) {
 }
 template <class M>
 typename std::enable_if<!M::hasExptime, int32_t>::type getExptime(
-    const M& reply) {
+    const M& /* reply */) {
   return 0;
 }
 
 // Lease token
 template <class M>
-int64_t getLeaseToken(const M& msg) {
+int64_t getLeaseToken(const M& /* msg */) {
   return 0;
 }
 inline int64_t getLeaseToken(const McLeaseGetReply& msg) {
@@ -48,15 +48,15 @@ inline int64_t getLeaseToken(const McLeaseSetRequest& msg) {
 
 // Message
 template <class M>
-typename std::enable_if<carbon::IsRequestTrait<M>::value, folly::StringPiece>::
-    type
-    getMessage(const M& msg) {
+typename std::
+    enable_if<!carbon::detail::HasMessage<M>::value, folly::StringPiece>::type
+    getMessage(const M& /* msg */) {
   return folly::StringPiece();
 }
 
 template <class M>
-typename std::enable_if<!carbon::IsRequestTrait<M>::value, folly::StringPiece>::
-    type
+typename std::
+    enable_if<carbon::detail::HasMessage<M>::value, folly::StringPiece>::type
     getMessage(const M& msg) {
   return msg.message();
 }
@@ -72,8 +72,36 @@ template <class M>
 constexpr typename std::
     enable_if<!carbon::IsRequestTrait<M>::value, const char*>::type
     getName() {
-  using MatchingRequest = RequestFromReplyType<M, RequestReplyPairs>;
-  return MatchingRequest::name;
+  return MatchingRequest<M>::name();
+}
+
+template <class Reply>
+typename std::enable_if_t<
+    !std::is_same<RequestFromReplyType<Reply, RequestReplyPairs>, void>::value,
+    bool>
+prepareUmbrellaRawReply(
+    UmbrellaSerializedMessage& umbrellaSerializedMessage,
+    Reply&& reply,
+    uint64_t reqid,
+    const struct iovec*& iovOut,
+    size_t& niovOut) {
+  return umbrellaSerializedMessage.prepare(
+      std::move(reply), reqid, iovOut, niovOut);
+}
+
+template <class Reply>
+typename std::enable_if_t<
+    std::is_same<RequestFromReplyType<Reply, RequestReplyPairs>, void>::value,
+    bool>
+prepareUmbrellaRawReply(
+    UmbrellaSerializedMessage&,
+    Reply&&,
+    uint64_t /* reqid */,
+    const struct iovec*& /* iovOut */,
+    size_t& /* niovOut */) {
+  LOG(ERROR) << "Umbrella Protocol does not support a reply type"
+             << " that is not Memcache compatible!";
+  return false;
 }
 
 } // detail
@@ -92,8 +120,7 @@ void MessagePrinter::requestReady(
           mc_res_unknown,
           from,
           to,
-          protocol,
-          0 /* latency is undefined when request is sent */)) {
+          protocol)) {
     if (options_.raw) {
       printRawRequest(msgId, request, protocol);
     } else {
@@ -113,7 +140,15 @@ void MessagePrinter::replyReady(
     int64_t latencyUs,
     ReplyStatsContext replyStatsContext) {
   if (auto out = filterAndBuildOutput(
-          msgId, reply, key, reply.result(), from, to, protocol, latencyUs)) {
+          msgId,
+          reply,
+          key,
+          reply.result(),
+          from,
+          to,
+          protocol,
+          latencyUs,
+          replyStatsContext.serverLoad)) {
     stats_.numBytesBeforeCompression +=
         replyStatsContext.replySizeBeforeCompression;
     stats_.numBytesAfterCompression +=
@@ -135,7 +170,8 @@ folly::Optional<StyledString> MessagePrinter::filterAndBuildOutput(
     const folly::SocketAddress& from,
     const folly::SocketAddress& to,
     mc_protocol_t protocol,
-    int64_t latencyUs) {
+    int64_t latencyUs,
+    const ServerLoad& serverLoad) {
   ++stats_.totalMessages;
 
   if (!matchAddress(from, to)) {
@@ -159,36 +195,78 @@ folly::Optional<StyledString> MessagePrinter::filterAndBuildOutput(
   StyledString out;
   out.append("\n");
 
+  if (options_.script) {
+    out.append("{\n", format_.dataOpColor);
+    /* always present, makes comma accounting simpler */
+    out.append(folly::sformat("  \"reqid\": {}", msgId));
+  }
+
   if (options_.printTimeFn) {
     timeval ts;
     gettimeofday(&ts, nullptr);
-    out.append(options_.printTimeFn(ts));
+
+    if (options_.script) {
+      out.append(
+          folly::sformat(",\n  \"ts\": \"{}\"", options_.printTimeFn(ts)));
+    } else {
+      out.append(options_.printTimeFn(ts));
+      out.append(" ");
+    }
   }
 
   out.append(serializeConnectionDetails(from, to, protocol));
-  out.append("\n");
 
-  out.append("{\n", format_.dataOpColor);
+  if (!options_.script) {
+    out.append("\n{\n", format_.dataOpColor);
+  }
 
   auto msgHeader =
       serializeMessageHeader(detail::getName<Message>(), result, key);
   if (!msgHeader.empty()) {
-    out.append("  ");
+    if (options_.script) {
+      out.append(",\n  ");
+    } else {
+      out.append("  ");
+    }
     out.append(std::move(msgHeader), format_.headerColor);
   }
 
   // Msg attributes
-  out.append("\n  reqid: ", format_.msgAttrColor);
-  out.append(folly::sformat("0x{:x}", msgId), format_.dataValueColor);
+  if (!options_.script) {
+    /* Rendered above for script mode */
+    out.append("\n  reqid: ", format_.msgAttrColor);
+    out.append(folly::sformat("0x{:x}", msgId), format_.dataValueColor);
+  }
 
   if (latencyUs > 0) { // it is 0 only for requests
-    out.append("\n  request/response latency (us): ", format_.msgAttrColor);
+    if (options_.script) {
+      out.append(",\n  \"rtt_us\": ");
+    } else {
+      out.append("\n  request/response latency (us): ", format_.msgAttrColor);
+    }
     out.append(folly::to<std::string>(latencyUs), format_.dataValueColor);
   }
 
-  out.append("\n  flags: ", format_.msgAttrColor);
-  out.append(folly::sformat("0x{:x}", message.flags()), format_.dataValueColor);
-  if (message.flags()) {
+  if (!serverLoad.isZero()) {
+    if (options_.script) {
+      out.append(",\n  \"server_load_percent\": ");
+    } else {
+      out.append("\n  server load: ", format_.msgAttrColor);
+    }
+    out.append(
+        folly::sformat("{:.2f}%", serverLoad.percentLoad()),
+        format_.dataValueColor);
+  }
+
+  if (options_.script) {
+    out.append(",\n  \"flags\": ");
+    out.append(folly::to<std::string>(message.flags()));
+  } else {
+    out.append("\n  flags: ", format_.msgAttrColor);
+    out.append(
+        folly::sformat("0x{:x}", message.flags()), format_.dataValueColor);
+  }
+  if (!options_.script && message.flags()) {
     auto flagDesc = describeFlags(message.flags());
     if (!flagDesc.empty()) {
       out.pushAppendColor(format_.attrColor);
@@ -205,51 +283,53 @@ folly::Optional<StyledString> MessagePrinter::filterAndBuildOutput(
       out.popAppendColor();
     }
   }
-
-  if (detail::getExptime(message)) {
-    out.append("\n  exptime: ", format_.msgAttrColor);
-    out.append(
-        folly::sformat("{:d}", detail::getExptime(message)),
-        format_.dataValueColor);
+  if (options_.script) {
+    out.pushBack(',');
+    out.append(getTypeSpecificAttributes(message));
+  } else {
+    out.append(getTypeSpecificAttributes(message));
   }
-  if (auto leaseToken = detail::getLeaseToken(message)) {
-    out.append("\n  lease-token: ", format_.msgAttrColor);
-    out.append(folly::sformat("{:d}", leaseToken), format_.dataValueColor);
-  }
-  if (!detail::getMessage(message).empty()) {
-    out.append("\n  message: ", format_.msgAttrColor);
-    out.append(detail::getMessage(message).str(), format_.dataValueColor);
-  }
-  out.append(getTypeSpecificAttributes(message));
-
-  out.pushBack('\n');
 
   if (!value.empty()) {
     size_t uncompressedSize;
     auto formattedValue = valueFormatter_->uncompressAndFormat(
-        value, message.flags(), format_, uncompressedSize);
+        value, message.flags(), format_, options_.script, uncompressedSize);
 
-    out.append("  value size: ", format_.msgAttrColor);
-    if (uncompressedSize != value.size()) {
-      out.append(
-          folly::sformat(
-              "{} uncompressed, {} compressed, {:.2f}% savings",
-              uncompressedSize,
-              value.size(),
-              100.0 - 100.0 * value.size() / uncompressedSize),
-          format_.dataValueColor);
+    if (options_.script) {
+      out.append(folly::sformat(",\n  \"value_wire_bytes\": {}", value.size()));
+      out.append(folly::sformat(
+          ",\n  \"value_uncompressed_bytes\": {}", uncompressedSize));
     } else {
-      out.append(folly::to<std::string>(value.size()), format_.dataValueColor);
+      out.append("\n  value size: ", format_.msgAttrColor);
+      if (uncompressedSize != value.size()) {
+        out.append(
+            folly::sformat(
+                "{} uncompressed, {} compressed, {:.2f}% savings",
+                uncompressedSize,
+                value.size(),
+                100.0 - 100.0 * value.size() / uncompressedSize),
+            format_.dataValueColor);
+      } else {
+        out.append(
+            folly::to<std::string>(value.size()), format_.dataValueColor);
+      }
     }
 
     if (!options_.quiet) {
-      out.append("\n  value: ", format_.msgAttrColor);
+      if (options_.script) {
+        out.append(",\n  \"value\": ");
+      } else {
+        out.append("\n  value: ", format_.msgAttrColor);
+      }
       out.append(formattedValue);
     }
-    out.pushBack('\n');
   }
 
-  out.append("}\n", format_.dataOpColor);
+  if (options_.script) {
+    out.append("\n},\n");
+  } else {
+    out.append("\n}\n", format_.dataOpColor);
+  }
 
   // Match pattern
   if (filter_.pattern) {
@@ -286,20 +366,31 @@ void MessagePrinter::printRawReply(
   switch (protocol) {
     case mc_ascii_protocol:
       LOG_FIRST_N(INFO, 1) << "ASCII protocol is not supported for raw data";
-      break;
-    case mc_umbrella_protocol:
-      umbrellaSerializedMessage.prepare(
-          std::move(reply), msgId, iovsBegin, iovsCount);
+      return;
+    case mc_umbrella_protocol_DONOTUSE:
+      if (!detail::prepareUmbrellaRawReply(
+              umbrellaSerializedMessage,
+              std::move(reply),
+              msgId,
+              iovsBegin,
+              iovsCount)) {
+        LOG(ERROR) << "Serialization failed for umbrella reply " << msgId;
+        return;
+      }
       break;
     case mc_caret_protocol:
-      caretSerializedMessage.prepare(
-          std::move(reply),
-          msgId,
-          CodecIdRange::Empty,
-          nullptr, /* codec map */
-          0.0, /* drop probability */
-          iovsBegin,
-          iovsCount);
+      if (!caretSerializedMessage.prepare(
+              std::move(reply),
+              msgId,
+              CodecIdRange::Empty,
+              nullptr, /* codec map */
+              0.0, /* drop probability */
+              ServerLoad::zero(),
+              iovsBegin,
+              iovsCount)) {
+        LOG(ERROR) << "Serialization failed for caret reply " << msgId;
+        return;
+      }
       break;
     default:
       CHECK(false);
@@ -317,32 +408,19 @@ void MessagePrinter::printRawRequest(
     LOG_FIRST_N(INFO, 1) << "ASCII protocol is not supported for raw data";
     return;
   }
-  McSerializedRequest req(request, msgId, protocol, CodecIdRange::Empty);
 
-  printRawMessage(req.getIovs(), req.getIovsCount());
+  McSerializedRequest req(request, msgId, protocol, CodecIdRange::Empty);
+  if (req.serializationResult() == McSerializedRequest::Result::OK) {
+    printRawMessage(req.getIovs(), req.getIovsCount());
+  } else {
+    LOG(ERROR) << "Serialization failed for request " << msgId << ".";
+  }
 }
 
 template <class Message>
 StyledString MessagePrinter::getTypeSpecificAttributes(const Message& msg) {
-  StyledString out;
-  return out;
+  return carbon::print(msg, detail::getName<Message>(), options_.script);
 }
-template <>
-inline StyledString MessagePrinter::getTypeSpecificAttributes(
-    const McMetagetReply& msg) {
-  StyledString out;
 
-  out.append("\n  age: ", format_.msgAttrColor);
-  out.append(
-      msg.age() ? folly::sformat("{:d}", msg.age()) : "unknown",
-      format_.dataValueColor);
-
-  if (!msg.ipAddress().empty()) {
-    out.append("\n  ip address: ", format_.msgAttrColor);
-    out.append(folly::sformat("{}", msg.ipAddress()), format_.dataValueColor);
-  }
-
-  return out;
-}
 }
 } // facebook::memcache

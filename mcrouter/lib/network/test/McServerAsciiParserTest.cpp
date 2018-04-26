@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2015-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include <gtest/gtest.h>
@@ -16,7 +14,7 @@ using namespace facebook::memcache;
 
 namespace facebook {
 namespace memcache {
-class UmbrellaMessageInfo;
+struct UmbrellaMessageInfo;
 }
 }
 
@@ -46,13 +44,13 @@ class TestRunner {
   template <class Request>
   TestRunner& expectNext(Request req, bool noreply = false) {
     callbacks_.emplace_back(
-        folly::make_unique<ExpectedRequestCallback<Request>>(
+        std::make_unique<ExpectedRequestCallback<Request>>(
             std::move(req), noreply));
     return *this;
   }
 
   TestRunner& expectMultiOpEnd() {
-    callbacks_.emplace_back(folly::make_unique<ExpectedMultiOpEndCallback>());
+    callbacks_.emplace_back(std::make_unique<ExpectedMultiOpEndCallback>());
     return *this;
   }
 
@@ -137,7 +135,7 @@ class TestRunner {
    public:
     explicit ExpectedRequestCallback(Request req, bool noreply = false)
         : ExpectedCallbackBase(req, noreply), req_(std::move(req)) {}
-    virtual ~ExpectedRequestCallback() = default;
+    ~ExpectedRequestCallback() override = default;
 
    private:
     Request req_;
@@ -180,14 +178,12 @@ class TestRunner {
 
     // ServerMcParser callbacks.
     void caretRequestReady(const UmbrellaMessageInfo&, const folly::IOBuf&) {
-      ASSERT_TRUE(false)
-          << "caretRequestReady should never be called for ASCII";
+      FAIL() << "caretRequestReady should never be called for ASCII";
     }
 
     template <class Request>
     void umbrellaRequestReady(Request&&, uint64_t) {
-      ASSERT_TRUE(false)
-          << "umbrellaRequestReady should never be called for ASCII";
+      FAIL() << "umbrellaRequestReady should never be called for ASCII";
     }
 
     void parseError(mc_res_t, folly::StringPiece reason) {

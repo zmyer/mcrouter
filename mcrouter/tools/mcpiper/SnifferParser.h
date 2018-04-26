@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -30,13 +28,17 @@ namespace memcache {
  *                  void replyReady(msgId, reply, key, from, to, protocol);
  */
 template <class Callback>
-class SnifferParser {
+class SnifferParserBase {
  public:
-  explicit SnifferParser(Callback& cb) noexcept;
+  explicit SnifferParserBase(Callback& cb) noexcept : callback_(cb){}
+  virtual ~SnifferParserBase() = default;
 
-  ClientServerMcParser<SnifferParser>& parser() {
-    return parser_;
-  }
+  virtual void
+  parse(folly::ByteRange data, uint32_t typeId, bool isFirstPacket) = 0;
+
+  virtual void resetParser() = 0;
+
+  virtual mc_protocol_t getParserProtocol() = 0;
 
   void setAddresses(
       folly::SocketAddress fromAddress,
@@ -51,7 +53,7 @@ class SnifferParser {
     currentMsgStartTimeUs_ = msgStartTimeUs;
   }
 
- private:
+ protected:
   using Clock = std::chrono::steady_clock;
   using TimePoint = std::chrono::time_point<Clock>;
 
@@ -75,8 +77,6 @@ class SnifferParser {
 
   // Callback called when a message is ready
   Callback& callback_;
-  // The parser itself.
-  ClientServerMcParser<SnifferParser> parser_;
   // Addresses of current message.
   folly::SocketAddress fromAddress_;
   folly::SocketAddress toAddress_;
@@ -91,8 +91,6 @@ class SnifferParser {
   // despite the Item being parsed separately from the header.
   uint64_t currentMsgStartTimeUs_;
 
-  void evictOldItems(TimePoint now);
-
   // ClientServerMcParser callbacks
   template <class Request>
   void requestReady(uint64_t msgId, Request&& request);
@@ -102,7 +100,35 @@ class SnifferParser {
       Reply&& reply,
       ReplyStatsContext replyStatsContext);
 
-  friend class ClientServerMcParser<SnifferParser>;
+  void evictOldItems(TimePoint now);
+
+ private:
+  template <class SnifferParserBase, class RequestList>
+  friend class ClientServerMcParser;
+};
+
+template <class Callback, class RequestList>
+class SnifferParser : public SnifferParserBase<Callback> {
+ public:
+  explicit SnifferParser(Callback& cb) noexcept;
+  ~SnifferParser() override {}
+
+  void parse(folly::ByteRange data, uint32_t typeId, bool isFirstPacket)
+      override {
+    parser_.parse(data, typeId, isFirstPacket);
+  }
+
+  void resetParser() override {
+    parser_.reset();
+  }
+
+  mc_protocol_t getParserProtocol() override {
+    return parser_.getProtocol();
+  }
+
+ private:
+  // The parser itself.
+  ClientServerMcParser<SnifferParserBase<Callback>, RequestList> parser_;
 };
 }
 } // facebook::memcache

@@ -1,19 +1,17 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
 
 #include <deque>
+#include <memory>
 #include <string>
 
 #include <folly/Function.h>
-#include <folly/Memory.h>
 #include <folly/Range.h>
 #include <folly/io/async/AsyncTransport.h>
 #include <folly/io/async/EventBase.h>
@@ -33,10 +31,10 @@ class SessionTestHarness {
  private:
   class NoopCallback : public McServerSession::StateCallback {
    public:
-    void onWriteQuiescence(McServerSession&) override final {}
-    void onCloseStart(McServerSession&) override final {}
-    void onCloseFinish(McServerSession&) override final {}
-    void onShutdown() override final {}
+    void onWriteQuiescence(McServerSession&) final {}
+    void onCloseStart(McServerSession&) final {}
+    void onCloseFinish(McServerSession&) final {}
+    void onShutdown() final {}
   };
   static NoopCallback noopCb;
 
@@ -53,7 +51,7 @@ class SessionTestHarness {
    * NOTE: Look at McServerSession.h for info about the above callbacks
    */
   explicit SessionTestHarness(
-      AsyncMcServerWorkerOptions opts = AsyncMcServerWorkerOptions(),
+      const AsyncMcServerWorkerOptions& opts,
       McServerSession::StateCallback& cb = SessionTestHarness::noopCb);
 
   /**
@@ -151,10 +149,10 @@ class SessionTestHarness {
    public:
     Transaction(Request&& req, folly::Function<void(const Request&)> replyFn)
         : req_(std::move(req)), replyFn_(std::move(replyFn)) {}
-    std::string key() const override final {
+    std::string key() const final {
       return req_.key().fullKey().str();
     }
-    void reply() override final {
+    void reply() final {
       replyFn_(req_);
     }
 
@@ -210,7 +208,7 @@ class SessionTestHarness {
       McServerRequestContext::reply(
           std::move(ctx), createReply(DefaultReply, req));
     };
-    return folly::make_unique<Transaction<Request>>(
+    return std::make_unique<Transaction<Request>>(
         std::move(req), std::move(replyFn));
   }
 
@@ -224,7 +222,7 @@ class SessionTestHarness {
       reply.value() = folly::IOBuf(folly::IOBuf::COPY_BUFFER, value);
       McServerRequestContext::reply(std::move(ctx), std::move(reply));
     };
-    return folly::make_unique<Transaction<McGetRequest>>(
+    return std::make_unique<Transaction<McGetRequest>>(
         std::move(req), std::move(replyFn));
   }
 
@@ -245,5 +243,6 @@ class SessionTestHarness {
 };
 
 inline SessionTestHarness::TransactionIf::~TransactionIf() {}
-}
-} // facebook::memcache
+
+} // memcache
+} // facebook

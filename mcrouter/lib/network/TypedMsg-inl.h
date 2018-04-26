@@ -1,13 +1,13 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2015-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
+
+#include <array>
 
 namespace facebook {
 namespace memcache {
@@ -35,15 +35,14 @@ struct CallDispatcherImplExpanded;
 /* Contains a single array that maps Ids to processMsg calls */
 template <class... Ms, size_t MaxId, class Proc, class... Args>
 struct CallDispatcherImplExpanded<List<Ms...>, MaxId, Proc, Args...> {
-  static constexpr DispatchFunc<Proc, Args...> array_[MaxId + 1] = {
-      DispatchImpl<Ms, Proc, Args...>::func...};
+  static constexpr std::array<DispatchFunc<Proc, Args...>, MaxId + 1> array_{
+      {DispatchImpl<Ms, Proc, Args...>::func...}};
 };
 
 /* Array needs definition outside of the class */
 template <class... Ms, size_t MaxId, class Proc, class... Args>
-constexpr DispatchFunc<Proc, Args...>
-    CallDispatcherImplExpanded<List<Ms...>, MaxId, Proc, Args...>::array_
-        [MaxId + 1];
+constexpr std::array<DispatchFunc<Proc, Args...>, MaxId + 1>
+    CallDispatcherImplExpanded<List<Ms...>, MaxId, Proc, Args...>::array_;
 
 // Sort List<Ms...> by M::typeId, expand to fill 0s, call ImplExpanded
 template <class... Ms, class Proc, class... Args>

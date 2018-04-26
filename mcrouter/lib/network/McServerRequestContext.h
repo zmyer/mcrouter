@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -15,10 +13,10 @@
 #include <folly/Optional.h>
 #include <folly/io/IOBuf.h>
 
-#include "mcrouter/lib/McRequestList.h"
 #include "mcrouter/lib/carbon/RequestReplyUtil.h"
 #include "mcrouter/lib/carbon/RoutingGroups.h"
 #include "mcrouter/lib/network/CarbonMessageList.h"
+#include "mcrouter/lib/network/ServerLoad.h"
 #include "mcrouter/lib/network/UmbrellaProtocol.h"
 
 namespace facebook {
@@ -61,6 +59,8 @@ class McServerRequestContext {
 
   double getDropProbability() const;
 
+  ServerLoad getServerLoad() const noexcept;
+
  private:
   McServerSession* session_;
 
@@ -91,7 +91,7 @@ class McServerRequestContext {
       carbon::GetLike<>>::value>::type
   replyImpl(McServerRequestContext&& ctx, Reply&& reply, Args&&... args);
 
-  template <class Reply>
+  template <class Reply, class SessionType = McServerSession>
   static void replyImpl2(
       McServerRequestContext&& ctx,
       Reply&& reply,
@@ -100,7 +100,7 @@ class McServerRequestContext {
 
   folly::Optional<folly::IOBuf>& asciiKey() {
     if (!asciiState_) {
-      asciiState_ = folly::make_unique<AsciiState>();
+      asciiState_ = std::make_unique<AsciiState>();
     }
     return asciiState_->key_;
   }
@@ -193,10 +193,25 @@ class McServerOnRequestIf<List<Request, Requests...>>
                << Request::name;
   }
 
-  virtual ~McServerOnRequestIf() = default;
+  ~McServerOnRequestIf() override = default;
 };
 
-class McServerOnRequest : public McServerOnRequestIf<McRequestList> {};
+class McServerOnRequest : public McServerOnRequestIf<McRequestList> {
+ public:
+  explicit McServerOnRequest(std::string requestHandlerName)
+      : requestHandlerName_(std::move(requestHandlerName)) {}
+
+  /**
+   * Return the name of the request handler being used in this
+   * instance of McServerOnRequest.
+   */
+  const std::string& name() const {
+    return requestHandlerName_;
+  }
+
+ private:
+  std::string requestHandlerName_;
+};
 
 /**
  * Helper class to wrap user-defined callbacks in a correct virtual interface.
@@ -212,25 +227,28 @@ class McServerOnRequestWrapper<OnRequest, List<>> : public McServerOnRequest {
 
   template <class... Args>
   explicit McServerOnRequestWrapper(Args&&... args)
-      : onRequest_(std::forward<Args>(args)...) {}
+      : McServerOnRequest(OnRequest::name),
+        onRequest_(std::forward<Args>(args)...) {}
 
   void caretRequestReady(
       const UmbrellaMessageInfo& headerInfo,
       const folly::IOBuf& reqBody,
-      McServerRequestContext&& ctx) override final;
+      McServerRequestContext&& ctx) final;
 
   void dispatchTypedRequestIfDefined(
       const UmbrellaMessageInfo& headerInfo,
       const folly::IOBuf& reqBody,
       McServerRequestContext&& ctx,
       std::true_type) {
-    onRequest_.dispatchTypedRequest(headerInfo, reqBody, std::move(ctx));
+    if (!onRequest_.dispatchTypedRequest(headerInfo, reqBody, std::move(ctx))) {
+      throw std::runtime_error("dispatchTypedRequestIfDefined got bad request");
+    }
   }
 
   void dispatchTypedRequestIfDefined(
       const UmbrellaMessageInfo&,
-      const folly::IOBuf& reqBody,
-      McServerRequestContext&& ctx,
+      const folly::IOBuf& /* reqBody */,
+      McServerRequestContext&&,
       std::false_type) {
     throw std::runtime_error("dispatchTypedRequestIfDefined got bad request");
   }
@@ -244,10 +262,8 @@ class McServerOnRequestWrapper<OnRequest, List<>> : public McServerOnRequest {
   }
 
   template <class Request>
-  void requestReadyImpl(
-      McServerRequestContext&& ctx,
-      Request&& req,
-      std::false_type) {
+  void
+  requestReadyImpl(McServerRequestContext&& ctx, Request&&, std::false_type) {
     McServerRequestContext::reply(
         std::move(ctx), ReplyT<Request>(mc_res_local_error));
   }
@@ -267,15 +283,15 @@ class McServerOnRequestWrapper<OnRequest, List<Request, Requests...>>
       : McServerOnRequestWrapper<OnRequest, List<Requests...>>(
             std::forward<Args>(args)...) {}
 
-  void requestReady(McServerRequestContext&& ctx, Request&& req)
-      override final {
+  void requestReady(McServerRequestContext&& ctx, Request&& req) final {
     this->requestReadyImpl(
         std::move(ctx),
         std::move(req),
         carbon::detail::CanHandleRequest::value<Request, OnRequest>());
   }
 };
-}
-} // facebook::memcache
+
+} // memcache
+} // facebook
 
 #include "McServerRequestContext-inl.h"

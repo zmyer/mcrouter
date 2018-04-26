@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -17,6 +15,7 @@
 
 #include "mcrouter/ProxyRequestPriority.h"
 #include "mcrouter/config-impl.h"
+#include "mcrouter/lib/mc/msg.h"
 
 namespace facebook {
 namespace memcache {
@@ -34,6 +33,12 @@ class ProxyBase;
 class CarbonRouterClientBase;
 class ShardSplitter;
 
+struct PoolContext {
+  folly::StringPiece poolName;
+  size_t indexInPool;
+  bool isShadow;
+};
+
 /**
  * This object is alive for the duration of user's request,
  * including any subrequests that might have been sent out.
@@ -48,12 +53,12 @@ class ShardSplitter;
 class ProxyRequestContext {
  public:
   using ClientCallback =
-      std::function<void(folly::StringPiece, size_t, const AccessPoint&)>;
+      std::function<void(const PoolContext&, const AccessPoint&)>;
   using ShardSplitCallback = std::function<void(const ShardSplitter&)>;
 
   virtual ~ProxyRequestContext();
 
-  ProxyBase& proxy() {
+  ProxyBase& proxy() const {
     return proxyBase_;
   }
 
@@ -61,12 +66,10 @@ class ProxyRequestContext {
     return recording_;
   }
 
-  void recordDestination(
-      folly::StringPiece poolName,
-      size_t index,
-      const AccessPoint& ap) const {
+  void recordDestination(const PoolContext& poolContext, const AccessPoint& ap)
+      const {
     if (recording_ && recordingState_->clientCallback) {
-      recordingState_->clientCallback(poolName, index, ap);
+      recordingState_->clientCallback(poolContext, ap);
     }
   }
 
@@ -82,6 +85,12 @@ class ProxyRequestContext {
 
   bool failoverDisabled() const {
     return failoverDisabled_;
+  }
+
+  void setPoolStatsIndex(int32_t index) {
+    if (poolStatIndex_ == -1) {
+      poolStatIndex_ = index;
+    }
   }
 
   ProxyRequestPriority priority() const {
@@ -117,15 +126,24 @@ class ProxyRequestContext {
     requester_ = std::move(requester);
   }
 
- protected:
-  bool replied_{false};
+  void setFinalResult(mc_res_t result) {
+    finalResult_ = result;
+  }
 
+  mc_res_t finalResult() const {
+    return finalResult_;
+  }
+
+ protected:
   /**
    * The function that will be called when all replies (including async)
    * come back.
    * Guaranteed to be called after enqueueReply_ (right after in sync mode).
    */
   void (*reqComplete_)(ProxyRequestContext& preq){nullptr};
+  mc_res_t finalResult_{mc_res_unknown};
+  int32_t poolStatIndex_{-1};
+  bool replied_{false};
 
   ProxyRequestContext(ProxyBase& pr, ProxyRequestPriority priority__);
 
@@ -138,13 +156,6 @@ class ProxyRequestContext {
 
  private:
   ProxyBase& proxyBase_;
-  bool failoverDisabled_{false};
-
-  /** If true, this is currently being processed by a proxy and
-      we want to notify we're done on destruction. */
-  bool processing_{false};
-
-  bool recording_{false};
 
   std::shared_ptr<CarbonRouterClientBase> requester_;
 
@@ -160,9 +171,15 @@ class ProxyRequestContext {
 
   uint64_t senderIdForTest_{0};
 
+  std::string userIpAddr_;
+
   ProxyRequestPriority priority_{ProxyRequestPriority::kCritical};
 
-  std::string userIpAddr_;
+  bool failoverDisabled_{false};
+  /** If true, this is currently being processed by a proxy and
+      we want to notify we're done on destruction. */
+  bool processing_{false};
+  bool recording_{false};
 
   ProxyRequestContext(const ProxyRequestContext&) = delete;
   ProxyRequestContext(ProxyRequestContext&&) noexcept = delete;

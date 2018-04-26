@@ -1,9 +1,7 @@
-# Copyright (c) 2015, Facebook, Inc.
-# All rights reserved.
+# Copyright (c) 2015-present, Facebook, Inc.
 #
-# This source code is licensed under the BSD-style license found in the
-# LICENSE file in the root directory of this source tree. An additional grant
-# of patent rights can be found in the PATENTS file in the same directory.
+# This source code is licensed under the MIT license found in the LICENSE
+# file in the root directory of this source tree.
 
 from __future__ import absolute_import
 from __future__ import division
@@ -46,4 +44,4 @@ class TestTkoReconfigure(McrouterTestCase):
         self.assertEqual(self.mcrouter.stats('suspect_servers'), {})
         # one was removed from config
         self.assertTrue(self.mcrouter.check_in_log(
-            '127.0.0.1:12345 (A) was TKO, removed from config'))
+            '127.0.0.1:12345 was TKO, removed from config'))

@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2015-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include <algorithm>
@@ -12,6 +10,7 @@
 
 #include <folly/Benchmark.h>
 #include <folly/Conv.h>
+#include <folly/init/Init.h>
 
 #include "mcrouter/lib/fbi/cpp/FuncGenerator.h"
 
@@ -53,55 +52,55 @@ void runVector(size_t n) {
 } // anonymous namespace
 
 BENCHMARK(FuncRange_2, n) {
-  for (int i = 0; i < n; ++i) {
+  for (auto i = 0u; i < n; ++i) {
     runFuncRange(2);
   }
 }
 
 BENCHMARK_RELATIVE(Vector_2, n) {
-  for (int i = 0; i < n; ++i) {
+  for (auto i = 0u; i < n; ++i) {
     runVector(2);
   }
 }
 
 BENCHMARK(FuncRange_5, n) {
-  for (int i = 0; i < n; ++i) {
+  for (auto i = 0u; i < n; ++i) {
     runFuncRange(5);
   }
 }
 
 BENCHMARK_RELATIVE(Vector_5, n) {
-  for (int i = 0; i < n; ++i) {
+  for (auto i = 0u; i < n; ++i) {
     runVector(5);
   }
 }
 
 BENCHMARK(FuncRange_10, n) {
-  for (int i = 0; i < n; ++i) {
+  for (auto i = 0u; i < n; ++i) {
     runFuncRange(10);
   }
 }
 
 BENCHMARK_RELATIVE(Vector_10, n) {
-  for (int i = 0; i < n; ++i) {
+  for (auto i = 0u; i < n; ++i) {
     runVector(10);
   }
 }
 
 BENCHMARK(FuncRange_100, n) {
-  for (int i = 0; i < n; ++i) {
+  for (auto i = 0u; i < n; ++i) {
     runFuncRange(100);
   }
 }
 
 BENCHMARK_RELATIVE(Vector_100, n) {
-  for (int i = 0; i < n; ++i) {
+  for (auto i = 0u; i < n; ++i) {
     runVector(100);
   }
 }
 
 int main(int argc, char** argv) {
-  google::ParseCommandLineFlags(&argc, &argv, true);
+  folly::init(&argc, &argv, true /* removeFlags */);
   folly::runBenchmarks();
   return 0;
 }

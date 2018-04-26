@@ -1,13 +1,13 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2015-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "LeaseTokenMap.h"
+
+#include <folly/Conv.h>
 
 namespace facebook {
 namespace memcache {
@@ -25,23 +25,35 @@ inline uint64_t applyMagic(uint32_t id) {
   return kAddMagicMask | id;
 }
 
+std::string leaseTokenTimeoutFunctionName() {
+  static std::atomic<uint64_t> uniqueId(0);
+  return folly::to<std::string>(
+      "carbon-lease-token-timeout-", uniqueId.fetch_add(1));
+}
+
 } // anonymous
 
 LeaseTokenMap::LeaseTokenMap(
-    folly::EventBaseThread& evbThread,
-    uint32_t leaseTokenTtl)
-    : evbThread_(evbThread),
-      timeoutHandler_(*this, *evbThread.getEventBase()),
-      leaseTokenTtlMs_(leaseTokenTtl) {
-  assert(leaseTokenTtlMs_ > 0);
-  evbThread_.getEventBase()->runInEventBaseThread(
-      [this]() { timeoutHandler_.scheduleTimeout(leaseTokenTtlMs_); });
+    const std::shared_ptr<folly::FunctionScheduler>& functionScheduler,
+    std::chrono::milliseconds leaseTokenTtl,
+    std::chrono::milliseconds cleanupInterval)
+    : functionScheduler_(functionScheduler),
+      timeoutFunctionName_(leaseTokenTimeoutFunctionName()),
+      leaseTokenTtl_(leaseTokenTtl) {
+  assert(leaseTokenTtl_.count() > 0);
+  if (!functionScheduler) {
+    throw std::runtime_error("null function scheduler");
+  }
+  functionScheduler->addFunction(
+      [this]() { tokenCleanupTimeout(); },
+      cleanupInterval,
+      timeoutFunctionName_,
+      cleanupInterval);
 }
 
 LeaseTokenMap::~LeaseTokenMap() {
-  if (evbThread_.running()) {
-    evbThread_.getEventBase()->runImmediatelyOrRunInEventBaseThreadAndWait(
-        [this]() { timeoutHandler_.cancelTimeout(); });
+  if (auto functionScheduler = functionScheduler_.lock()) {
+    functionScheduler->cancelFunctionAndWait(timeoutFunctionName_);
   }
 }
 
@@ -53,10 +65,7 @@ uint64_t LeaseTokenMap::insert(std::string routeName, Item item) {
   auto it = data_.emplace(
       specialToken,
       LeaseTokenMap::ListItem(
-          specialToken,
-          std::move(routeName),
-          std::move(item),
-          leaseTokenTtlMs_));
+          specialToken, std::move(routeName), std::move(item), leaseTokenTtl_));
   invalidationQueue_.push_back(it.first->second);
 
   return specialToken;
@@ -100,24 +109,14 @@ uint64_t LeaseTokenMap::getOriginalLeaseToken(
   return token;
 }
 
-void LeaseTokenMap::onTimeout() {
+void LeaseTokenMap::tokenCleanupTimeout() {
+  const auto now = ListItem::Clock::now();
   std::lock_guard<std::mutex> lock(mutex_);
-
-  auto now = ListItem::Clock::now();
   auto cur = invalidationQueue_.begin();
   while (cur != invalidationQueue_.end() && cur->tokenTimeout <= now) {
     uint64_t specialToken = cur->specialToken;
     cur = invalidationQueue_.erase(cur);
     data_.erase(specialToken);
-  }
-
-  if (invalidationQueue_.empty()) {
-    timeoutHandler_.scheduleTimeout(leaseTokenTtlMs_);
-  } else {
-    auto nextExpiration = std::chrono::duration_cast<std::chrono::milliseconds>(
-                              invalidationQueue_.front().tokenTimeout - now)
-                              .count();
-    timeoutHandler_.scheduleTimeout(std::max<uint32_t>(nextExpiration, 1));
   }
 }
 
@@ -129,6 +128,7 @@ size_t LeaseTokenMap::size() const {
 bool LeaseTokenMap::conflicts(uint64_t originalToken) {
   return hasMagic(originalToken);
 }
-}
-}
-} // facebook::memcache::mcrouter
+
+} // mcrouter
+} // memcache
+} // facebook

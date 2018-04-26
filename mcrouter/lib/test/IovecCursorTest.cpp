@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include <gtest/gtest.h>
@@ -39,6 +37,15 @@ TEST(IovecCursor, construct) {
   EXPECT_TRUE(cursor.hasDataAvailable());
   EXPECT_EQ(10, cursor.totalLength());
   EXPECT_EQ(0, cursor.tell());
+}
+
+TEST(IovecCursor, construct_empty) {
+  std::string buf1 = "";
+  auto p = getIovecCursor({ buf1 });
+  auto& cursor = p.first;
+
+  EXPECT_FALSE(cursor.hasDataAvailable());
+  EXPECT_EQ(0, cursor.totalLength());
 }
 
 TEST(IovecCursor, basic) {

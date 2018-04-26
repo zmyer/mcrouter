@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2016, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -17,9 +15,8 @@ namespace memcache {
 class MemoryController : public std::enable_shared_from_this<MemoryController> {
  public:
   MemoryController(
-      uint64_t target,
+      const CongestionControllerOptions& opts,
       folly::EventBase& evb,
-      std::chrono::milliseconds delay = std::chrono::milliseconds(100),
       size_t queueCapacity = 1000);
 
   double getDropProbability() const;
@@ -35,6 +32,7 @@ class MemoryController : public std::enable_shared_from_this<MemoryController> {
   bool firstLoop_{true};
   std::atomic<bool> stopController_{false};
   uint64_t target_;
+  std::chrono::milliseconds dataCollectionInterval_;
   std::shared_ptr<CongestionController> logic_;
 };
 

@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -33,7 +31,7 @@ class WriteBuffer {
   folly::Optional<Destructor> destructor_;
 
  public:
-  using Queue = UniqueIntrusiveList<WriteBuffer, &WriteBuffer::hook_>;
+  using List = UniqueIntrusiveList<WriteBuffer, &WriteBuffer::hook_>;
 
   explicit WriteBuffer(mc_protocol_t protocol);
   ~WriteBuffer();
@@ -136,33 +134,36 @@ class WriteBuffer {
   WriteBuffer& operator=(WriteBuffer&&) = delete;
 };
 
-// The only purpose of this class is to avoid a circular #include dependency
-// between WriteBuffer.h and McServerSession.h.
-class WriteBufferIntrusiveList : public WriteBuffer::Queue {};
-
 class WriteBufferQueue {
  public:
-  explicit WriteBufferQueue(mc_protocol_t protocol) noexcept
-      : protocol_(protocol), tlFreeQueue_(initFreeQueue(protocol_)) {}
+  WriteBufferQueue() = default;
 
-  std::unique_ptr<WriteBuffer> get() {
-    if (tlFreeQueue_.empty()) {
-      return folly::make_unique<WriteBuffer>(protocol_);
+  std::unique_ptr<WriteBuffer> get(mc_protocol_t protocol) {
+    if (!tlFreeStack_) {
+      tlFreeStack_ = &initFreeStack(protocol);
+    }
+    assert(
+        tlFreeStack_ == &initFreeStack(protocol) &&
+        "protocol changed or called from a different thread");
+    if (tlFreeStack_->empty()) {
+      return std::make_unique<WriteBuffer>(protocol);
     } else {
-      return tlFreeQueue_.popFront();
+      return tlFreeStack_->popFront();
     }
   }
 
   void push(std::unique_ptr<WriteBuffer> wb) {
+    assert(tlFreeStack_ && "must have been initialized");
     queue_.pushBack(std::move(wb));
   }
 
   void pop(bool popBatch) {
+    assert(tlFreeStack_ && "must have been initialized");
     bool done = false;
     do {
       assert(!empty());
-      if (tlFreeQueue_.size() < kMaxFreeQueueSz) {
-        auto& wb = tlFreeQueue_.pushBack(queue_.popFront());
+      if (tlFreeStack_->size() < kMaxFreeQueueSz) {
+        auto& wb = tlFreeStack_->pushFront(queue_.popFront());
         done = wb.isEndOfBatch();
         wb.clear();
       } else {
@@ -178,18 +179,18 @@ class WriteBufferQueue {
  private:
   constexpr static size_t kMaxFreeQueueSz = 50;
 
-  mc_protocol_t protocol_;
-  WriteBuffer::Queue& tlFreeQueue_;
-  WriteBuffer::Queue queue_;
+  WriteBuffer::List* tlFreeStack_{nullptr};
+  WriteBuffer::List queue_;
 
-  static WriteBuffer::Queue& initFreeQueue(mc_protocol_t protocol) noexcept;
+  static WriteBuffer::List& initFreeStack(mc_protocol_t protocol) noexcept;
 
   WriteBufferQueue(const WriteBufferQueue&) = delete;
   WriteBufferQueue& operator=(const WriteBufferQueue&) = delete;
   WriteBufferQueue(WriteBufferQueue&&) noexcept = delete;
   WriteBufferQueue& operator=(WriteBufferQueue&&) = delete;
 };
-}
-} // facebook::memcache
+
+} // memcache
+} // facebook
 
 #include "WriteBuffer-inl.h"

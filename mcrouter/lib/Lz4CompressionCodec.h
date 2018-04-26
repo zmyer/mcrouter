@@ -1,17 +1,15 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
 
 #include <folly/Format.h>
 
-#if FOLLY_HAVE_LIBLZ4
+#if FOLLY_HAVE_LIBLZ4 && !defined(DISABLE_COMPRESSION)
 #include "mcrouter/lib/Compression.h"
 #include "mcrouter/lib/IOBufUtil.h"
 #include "mcrouter/lib/IovecCursor.h"
@@ -30,11 +28,11 @@ class Lz4CompressionCodec : public CompressionCodec {
       uint32_t codecCompressionLevel);
 
   std::unique_ptr<folly::IOBuf> compress(const struct iovec* iov, size_t iovcnt)
-      override final;
+      final;
   std::unique_ptr<folly::IOBuf> uncompress(
       const struct iovec* iov,
       size_t iovcnt,
-      size_t uncompressedLength = 0) override final;
+      size_t uncompressedLength = 0) final;
 
  private:
   struct Deleter {
@@ -50,4 +48,4 @@ class Lz4CompressionCodec : public CompressionCodec {
 
 } // memcache
 } // facebook
-#endif // FOLLY_HAVE_LIBLZ4
+#endif // FOLLY_HAVE_LIBLZ4 && !defined(DISABLE_COMPRESSION)

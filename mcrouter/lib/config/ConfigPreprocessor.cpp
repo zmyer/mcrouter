@@ -1,23 +1,21 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "ConfigPreprocessor.h"
 
+#include <memory>
 #include <random>
 
 #include <folly/Format.h>
-#include <folly/Hash.h>
 #include <folly/IPAddress.h>
-#include <folly/Memory.h>
 #include <folly/Optional.h>
 #include <folly/Random.h>
 #include <folly/String.h>
+#include <folly/hash/Hash.h>
 #include <folly/json.h>
 
 #include "mcrouter/lib/config/ImportResolverIf.h"
@@ -27,10 +25,7 @@
 
 using folly::dynamic;
 using folly::json::stripComments;
-using folly::make_unique;
 using folly::StringPiece;
-using std::placeholders::_1;
-using std::placeholders::_2;
 using std::string;
 using std::vector;
 
@@ -389,11 +384,30 @@ class ConfigPreprocessor::Macro {
             tryGet(param, "name", "Macro param object"),
             "Macro param object name");
 
+        auto optionalPtr = param.get_ptr("optional");
+        if (optionalPtr) {
+          checkLogic(
+              optionalPtr->isBool(),
+              "Incorrect definition for parameter '{}' in macro '{}'. Expected "
+              "optional parameter 'optional' to be boolean, but got {}!",
+              name,
+              name_,
+              optionalPtr->typeName());
+        }
+
         if (auto defaultPtr = param.get_ptr("default")) {
+          if (optionalPtr && !optionalPtr->getBool()) {
+            throwLogic(
+                "Conflicting options provided for parameter '{}' in "
+                "macro '{}'. Default was set, but the parameter is also "
+                "explicitly marked as not optional.",
+                name,
+                name_);
+          }
           hasOptional = true;
           --minParamCnt_;
           params_.emplace_back(name.str(), *defaultPtr, false);
-        } else if (param.get_ptr("optional") != nullptr) {
+        } else if (optionalPtr && optionalPtr->getBool()) {
           hasOptional = true;
           --minParamCnt_;
           params_.emplace_back(name.str(), nullptr, false);
@@ -571,6 +585,21 @@ class ConfigPreprocessor::BuiltIns {
   }
 
   /**
+   * Casts its argument to double.
+   * Usage: @double(5.1)
+   */
+  static dynamic doubleMacro(Context&& ctx) {
+    try {
+      return ctx.at("value").asDouble();
+    } catch (const std::exception& e) {
+      throwLogic(
+          "Can not cast {} to double:\n{}",
+          ctx.at("value").typeName(),
+          e.what());
+    }
+  }
+
+  /**
    * Casts its argument to string.
    * Usage: @str(@int(5))
    */
@@ -672,28 +701,32 @@ class ConfigPreprocessor::BuiltIns {
   }
 
   /**
-   * Randomly shuffles list. Currently objects have no order, so it won't
-   * have any effect if dictionary is obj.
-   * Usage: @shuffle(list) or @shuffle(obj)
+   * Randomly shuffles list.
+   * Usage: @shuffle(list) or @shuffle(list, seed)
    *
-   * Returns list or object with randomly shuffled items.
+   * "dictionary": list
+   * "seed": int (optional, must be non-negative)
+   * Returns list with randomly shuffled items.
    */
   static dynamic shuffleMacro(Context&& ctx) {
-    auto dictionary = ctx.move("dictionary");
+    auto array = ctx.expandRawArg("dictionary");
+    checkLogic(array.isArray(), "Shuffle: argument must be an array");
 
-    checkLogic(
-        dictionary.isObject() || dictionary.isArray(),
-        "Shuffle: dictionary is not array/object");
+    static thread_local std::minstd_rand defaultEngine(
+        folly::randomNumberSeed());
 
-    static std::minstd_rand engine(folly::randomNumberSeed());
-    if (dictionary.isArray()) {
-      for (size_t i = 0; i < dictionary.size(); ++i) {
-        std::uniform_int_distribution<size_t> d(i, dictionary.size() - 1);
-        std::swap(dictionary[i], dictionary[d(engine)]);
-      }
-    } // obj will be in random order, because it is currently unordered_map
+    if (auto seedArg = ctx.tryExpandRawArg("seed")) {
+      checkLogic(
+          seedArg->isInt() && seedArg->getInt() >= 0,
+          "Shuffle: seed must be a non-negative integer");
+      auto seed = static_cast<uint32_t>(seedArg->getInt());
+      std::minstd_rand seededEngine(seed);
+      std::shuffle(array.begin(), array.end(), seededEngine);
+      return array;
+    }
 
-    return dictionary;
+    std::shuffle(array.begin(), array.end(), defaultEngine);
+    return array;
   }
 
   /**
@@ -955,6 +988,14 @@ class ConfigPreprocessor::BuiltIns {
   }
 
   /**
+   * Returns true if value is a double
+   * Usage: @isDouble(value)
+   */
+  static dynamic isDoubleMacro(Context&& ctx) {
+    return ctx.at("value").isDouble();
+  }
+
+  /**
    * Returns true if value is an object
    * Usage: @isObject(value)
    */
@@ -1102,9 +1143,12 @@ class ConfigPreprocessor::BuiltIns {
    * Usage: @fail(Your message here)
    */
   static dynamic failMacro(Context&& ctx) {
-    const auto& A = ctx.at("msg");
-    checkLogic(A.isString(), "fail: msg is not a string");
-    throw std::logic_error(A.data());
+    const auto& msg = ctx.at("msg");
+    if (msg.isString()) {
+      throw std::logic_error(msg.data());
+    } else {
+      throw std::logic_error(folly::toPrettyJson(msg));
+    }
   }
 
   /**
@@ -1241,9 +1285,9 @@ class ConfigPreprocessor::BuiltIns {
    * %keyName% (key of current entry) and %itemName% (value of current entry)
    */
   static dynamic
-  transform(ConfigPreprocessor* p, dynamic&& json, const Context& ctx) {
+  transform(ConfigPreprocessor& p, dynamic&& json, const Context& ctx) {
     auto dictionary =
-        p->expandMacros(moveGet(json, "dictionary", "Transform"), ctx);
+        p.expandMacros(moveGet(json, "dictionary", "Transform"), ctx);
 
     checkLogic(
         dictionary.isObject() || dictionary.isArray(),
@@ -1276,14 +1320,14 @@ class ConfigPreprocessor::BuiltIns {
         keyRef = std::move(key);
         itemRef = std::move(value);
         auto nKey =
-            keyTransform ? p->expandMacros(*keyTransform, extContext) : keyRef;
+            keyTransform ? p.expandMacros(*keyTransform, extContext) : keyRef;
         checkLogic(
             nKey.isArray() || nKey.isString(),
             "Transformed key is not array/string");
         if (nKey.isArray() && nKey.empty()) {
           continue;
         }
-        auto nItem = itemTransform ? p->expandMacros(*itemTransform, extContext)
+        auto nItem = itemTransform ? p.expandMacros(*itemTransform, extContext)
                                    : std::move(itemRef);
         if (nKey.isString()) {
           res.insert(std::move(nKey), std::move(nItem));
@@ -1304,7 +1348,7 @@ class ConfigPreprocessor::BuiltIns {
         // add %key% and %item% to current context.
         keyRef = index;
         itemRef = std::move(item);
-        item = p->expandMacros(*itemTransform, extContext);
+        item = p.expandMacros(*itemTransform, extContext);
       }
       return dictionary;
     }
@@ -1332,10 +1376,10 @@ class ConfigPreprocessor::BuiltIns {
    * and %valueName% - current value.
    */
   static dynamic
-  process(ConfigPreprocessor* p, dynamic&& json, const Context& ctx) {
+  process(ConfigPreprocessor& p, dynamic&& json, const Context& ctx) {
     auto dictionary =
-        p->expandMacros(moveGet(json, "dictionary", "Process"), ctx);
-    auto value = p->expandMacros(moveGet(json, "initialValue", "Process"), ctx);
+        p.expandMacros(moveGet(json, "dictionary", "Process"), ctx);
+    auto value = p.expandMacros(moveGet(json, "initialValue", "Process"), ctx);
     const auto& transform = tryGet(json, "transform", "Process");
 
     checkLogic(
@@ -1367,7 +1411,7 @@ class ConfigPreprocessor::BuiltIns {
         keyRef = std::move(key);
         itemRef = std::move(val);
         valueRef = std::move(value);
-        value = p->expandMacros(transform, extContext);
+        value = p.expandMacros(transform, extContext);
       }
       return value;
     } else { // array
@@ -1377,7 +1421,7 @@ class ConfigPreprocessor::BuiltIns {
         keyRef = index;
         itemRef = std::move(item);
         valueRef = std::move(value);
-        value = p->expandMacros(transform, extContext);
+        value = p.expandMacros(transform, extContext);
       }
       return value;
     }
@@ -1417,8 +1461,8 @@ class ConfigPreprocessor::BuiltIns {
    *  "top": 2
    */
   static dynamic
-  foreach(ConfigPreprocessor* p, dynamic&& json, const Context& ctx) {
-    auto from = p->expandMacros(moveGet(json, "from", "Foreach"), ctx);
+  foreach(ConfigPreprocessor& p, dynamic&& json, const Context& ctx) {
+    auto from = p.expandMacros(moveGet(json, "from", "Foreach"), ctx);
     checkLogic(
         from.isObject() || from.isArray(), "Foreach: from is not object/array");
     StringPiece itemStr = "item";
@@ -1431,7 +1475,7 @@ class ConfigPreprocessor::BuiltIns {
     }
     size_t top = from.size();
     if (auto jTopField = json.get_ptr("top")) {
-      auto jtop = p->expandMacros(std::move(*jTopField), ctx);
+      auto jtop = p.expandMacros(std::move(*jTopField), ctx);
       checkLogic(
           jtop.isInt() && jtop.getInt() >= 0,
           "Foreach: top should be a non-negative integer");
@@ -1446,7 +1490,7 @@ class ConfigPreprocessor::BuiltIns {
     auto& itemRef = extContext.addExpanded(itemStr, nullptr);
 
     auto appendUseToResult = [&]() {
-      auto use = p->expandMacros(useIt->second, extContext);
+      auto use = p.expandMacros(useIt->second, extContext);
       if (result.isNull()) {
         checkLogic(
             use.isObject() || use.isArray(),
@@ -1473,7 +1517,7 @@ class ConfigPreprocessor::BuiltIns {
       if (whereIt == json.items().end()) {
         return true;
       }
-      auto where = p->expandMacros(whereIt->second, extContext);
+      auto where = p.expandMacros(whereIt->second, extContext);
       checkLogic(where.isBool(), "Foreach: expanded 'where' is not boolean");
       return where.getBool();
     };
@@ -1525,7 +1569,7 @@ class ConfigPreprocessor::BuiltIns {
     }
     if (result.isNull()) {
       if (auto jnoMatchResult = json.get_ptr("noMatchResult")) {
-        return p->expandMacros(std::move(*jnoMatchResult), ctx);
+        return p.expandMacros(std::move(*jnoMatchResult), ctx);
       }
       return from.isObject() ? dynamic::object() : dynamic::array();
     }
@@ -1558,6 +1602,8 @@ ConfigPreprocessor::ConfigPreprocessor(
 
   addMacro("int", {"value"}, &BuiltIns::intMacro);
 
+  addMacro("double", {"value"}, &BuiltIns::doubleMacro);
+
   addMacro("str", {"value"}, &BuiltIns::strMacro);
 
   addMacro("bool", {"value"}, &BuiltIns::boolMacro);
@@ -1576,7 +1622,11 @@ ConfigPreprocessor::ConfigPreprocessor(
       &BuiltIns::selectMacro,
       false);
 
-  addMacro("shuffle", {"dictionary"}, &BuiltIns::shuffleMacro);
+  addMacro(
+      "shuffle",
+      {"dictionary", dynamic::object("name", "seed")("optional", true)},
+      &BuiltIns::shuffleMacro,
+      false);
 
   addMacro("slice", {"dictionary", "from", "to"}, &BuiltIns::sliceMacro);
 
@@ -1595,6 +1645,8 @@ ConfigPreprocessor::ConfigPreprocessor(
   addMacro("isBool", {"value"}, &BuiltIns::isBoolMacro);
 
   addMacro("isInt", {"value"}, &BuiltIns::isIntMacro);
+
+  addMacro("isDouble", {"value"}, &BuiltIns::isDoubleMacro);
 
   addMacro("isObject", {"value"}, &BuiltIns::isObjectMacro);
 
@@ -1640,16 +1692,22 @@ ConfigPreprocessor::ConfigPreprocessor(
   builtInCalls_.emplace("constDef", &BuiltIns::noop);
 
   builtInCalls_.emplace(
-      "transform", std::bind(&BuiltIns::transform, this, _1, _2));
+      "transform", [this](dynamic&& json, const Context& ctx) {
+        return BuiltIns::transform(*this, std::move(json), ctx);
+      });
 
-  builtInCalls_.emplace("process", std::bind(&BuiltIns::process, this, _1, _2));
+  builtInCalls_.emplace("process", [this](dynamic&& json, const Context& ctx) {
+    return BuiltIns::process(*this, std::move(json), ctx);
+  });
 
-  builtInCalls_.emplace("foreach", std::bind(&BuiltIns::foreach, this, _1, _2));
+  builtInCalls_.emplace("foreach", [this](dynamic&& json, const Context& ctx) {
+    return BuiltIns::foreach(*this, std::move(json), ctx);
+  });
 }
 
 void ConfigPreprocessor::addConst(StringPiece name, folly::dynamic result) {
   auto it = consts_.emplace(name, nullptr).first;
-  it->second = folly::make_unique<Const>(*this, it->first, std::move(result));
+  it->second = std::make_unique<Const>(*this, it->first, std::move(result));
 }
 
 void ConfigPreprocessor::addMacro(
@@ -1658,7 +1716,7 @@ void ConfigPreprocessor::addMacro(
     Macro::Func func,
     bool autoExpand) {
   auto it = macros_.emplace(name, nullptr).first;
-  it->second = folly::make_unique<Macro>(
+  it->second = std::make_unique<Macro>(
       *this, it->first, params, std::move(func), autoExpand);
 }
 
@@ -1950,5 +2008,6 @@ dynamic ConfigPreprocessor::getConfigWithoutMacros(
 
   return prep.expandMacros(std::move(config), Context(prep));
 }
-}
-} // facebook::memcache
+
+} // memcache
+} // facebook

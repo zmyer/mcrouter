@@ -1,11 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
- *
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  */
 #pragma once
 
@@ -70,12 +67,22 @@ class AsyncWriter {
   bool run(std::function<void()> f);
 
   /**
+   * Increase the maximum queue size. The max queue size will never decrease.
+   **/
+  void increaseMaxQueueSize(size_t add);
+
+  /**
+   * Make the queue have unlimited size.
+   */
+  void makeQueueSizeUnlimited();
+
+  /**
    * Waits for all the functions to complete
    */
   ~AsyncWriter();
 
  private:
-  const size_t maxQueueSize_;
+  size_t maxQueueSize_;
   std::atomic<size_t> queueSize_{0};
   std::atomic<bool> stopped_{false};
   SFRLock runLock_;

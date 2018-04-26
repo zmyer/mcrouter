@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include <gtest/gtest.h>
@@ -190,7 +188,7 @@ TEST(NoCompressionCodec, uncompressChained) {
   testUncompressChained(compressor.get(), *getAsciiReply(), 3);
 }
 
-#if FOLLY_HAVE_LIBLZ4
+#if FOLLY_HAVE_LIBLZ4 && !defined(DISABLE_COMPRESSION)
 TEST(Lz4CompressionCodec, compressAndUncompress) {
   auto compressor = createCompressionCodec(
       CompressionCodecType::LZ4, getAsciiDictionary(), 1);
@@ -238,9 +236,9 @@ TEST(Lz4CompressionCodec, uncompressChained) {
       CompressionCodecType::LZ4, getAsciiDictionary(), 1);
   testUncompressChained(compressor.get(), *getAsciiReply(), 3);
 }
-#endif // FOLLY_HAVE_LIBLZ4
+#endif // FOLLY_HAVE_LIBLZ4 && !defined(DISABLE_COMPRESSION)
 
-#if FOLLY_HAVE_LIBZSTD
+#if FOLLY_HAVE_LIBZSTD && !defined(DISABLE_COMPRESSION)
 TEST(ZstdCompressionCodec, compressAndUncompress) {
   auto compressor = createCompressionCodec(
       CompressionCodecType::ZSTD, getAsciiDictionary(), 1);
@@ -349,7 +347,7 @@ TEST(ZstdCompressionCodec, uncompressChainedWithCompressionLevel) {
 
   testUncompressChained(compressor.get(), *getAsciiReply(), 3);
 }
-#endif // FOLLY_HAVE_LIBZSTD
+#endif // FOLLY_HAVE_LIBZSTD && !defined(DISABLE_COMPRESSION)
 
 TEST(Lz4ImmutableCompressionCodec, compressAndUncompress) {
   auto compressor = createCompressionCodec(

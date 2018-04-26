@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -18,21 +16,11 @@
 #include <folly/Likely.h>
 #include <folly/Range.h>
 
-#include "mcrouter/lib/fbi/nstring.h"
-
 using timeval_t = struct timeval;
 
 namespace folly {
 struct dynamic;
 } // folly
-
-inline folly::Expected<folly::StringPiece, folly::ConversionCode> parseTo(
-    folly::StringPiece sp,
-    nstring_t& ns) noexcept {
-  ns.str = (sp.empty() ? nullptr : (char*)sp.begin());
-  ns.len = sp.size();
-  return folly::StringPiece(sp.end(), sp.end());
-}
 
 namespace facebook {
 namespace memcache {
@@ -81,35 +69,6 @@ template <typename... Args>
 
 template <typename T, typename F>
 T to(const F& x);
-
-template <>
-inline nstring_t to<nstring_t>(const folly::StringPiece& sp) {
-  nstring_t ns;
-  ::parseTo(sp, ns);
-  return ns;
-}
-
-template <>
-inline nstring_t to<nstring_t>(const std::string& s) {
-  nstring_t ns;
-  ::parseTo(s, ns);
-  return ns;
-}
-
-template <>
-inline folly::StringPiece to<folly::StringPiece>(const nstring_t& ns) {
-  return folly::StringPiece(ns.str, ns.len);
-}
-
-template <>
-inline std::string to<std::string>(const nstring_t& ns) {
-  return std::string(ns.str, ns.len);
-}
-
-template <>
-inline std::string to<std::string>(nstring_t* const& ns) {
-  return std::string(ns->str, ns->len);
-}
 
 /** milliseconds to timeval_t */
 template <>
@@ -287,5 +246,10 @@ std::string toPrettySortedJson(const folly::dynamic& json);
  * Makes sure a directory exists and is writable (e.g. create if not found, etc)
  */
 bool ensureDirExistsAndWritable(const std::string& path);
+
+/**
+ * Makes sure that a file or directory has the desired permissions.
+ */
+bool ensureHasPermission(const std::string& path, mode_t mode);
 }
 } // facebook::memcache

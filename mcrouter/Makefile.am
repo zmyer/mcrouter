@@ -17,7 +17,6 @@ CLEANFILES = \
 libmcroutercore_a_SOURCES = \
   AsyncLog.cpp \
   AsyncLog.h \
-  AsyncTimer.h \
   AsyncWriter.cpp \
   AsyncWriter.h \
   AsyncWriterEntry.h \
@@ -32,7 +31,6 @@ libmcroutercore_a_SOURCES = \
   CarbonRouterInstance.h \
   CarbonRouterInstanceBase.cpp \
   CarbonRouterInstanceBase.h \
-  Clock.h \
   ConfigApi.cpp \
   ConfigApi.h \
   ConfigApiIf.h \
@@ -67,7 +65,6 @@ libmcroutercore_a_SOURCES = \
   PoolFactory.cpp \
   PoolFactory.h \
   Proxy-inl.h \
-  Proxy.cpp \
   Proxy.h \
   ProxyBase-inl.h \
   ProxyBase.cpp \
@@ -99,7 +96,6 @@ libmcroutercore_a_SOURCES = \
   routes/AllInitialRouteFactory.h \
   routes/AllMajorityRouteFactory.h \
   routes/AllSyncRouteFactory.h \
-  routes/AsynclogRoute.cpp \
   routes/AsynclogRoute.h \
   routes/BigValueRoute-inl.h \
   routes/BigValueRoute.cpp \
@@ -108,17 +104,18 @@ libmcroutercore_a_SOURCES = \
   routes/DefaultShadowPolicy.h \
   routes/DestinationRoute.h \
   routes/DevNullRoute.h \
-  routes/ErrorRouteFactory.h \
+  routes/ErrorRoute.h \
   routes/ExtraRouteHandleProviderIf.h \
   routes/FailoverPolicy.h \
   routes/FailoverRateLimiter.cpp \
   routes/FailoverRateLimiter.h \
   routes/FailoverRoute-inl.h \
   routes/FailoverRoute.h \
-  routes/FailoverWithExptimeRoute.cpp \
-  routes/HashRoute.cpp \
+  routes/FailoverWithExptimeRouteFactory.h \
   routes/HostIdRouteFactory.h \
   routes/L1L2CacheRouteFactory.h \
+  routes/L1L2SizeSplitRoute.cpp \
+  routes/L1L2SizeSplitRoute.h \
   routes/LatestRoute.h \
   routes/McExtraRouteHandleProvider-inl.h \
   routes/McExtraRouteHandleProvider.h \
@@ -131,13 +128,13 @@ libmcroutercore_a_SOURCES = \
   routes/McrouterRouteHandle.h \
   routes/MigrateRouteFactory.h \
   routes/MissFailoverRoute.h \
-  routes/ModifyExptimeRoute.cpp \
   routes/ModifyExptimeRoute.h \
   routes/ModifyKeyRoute.h \
   routes/NullRoute.cpp \
   routes/OperationSelectorRoute-inl.h \
   routes/OperationSelectorRoute.h \
   routes/OutstandingLimitRoute.h \
+  routes/PoolRouteUtils.h \
   routes/PrefixSelectorRoute.h \
   routes/ProxyRoute-inl.h \
   routes/ProxyRoute.h \
@@ -154,8 +151,13 @@ libmcroutercore_a_SOURCES = \
   routes/ShadowRoute.h \
   routes/ShadowRoute-inl.h \
   routes/ShadowRouteIf.h \
+  routes/ShadowSettings.cpp \
+  routes/ShadowSettings.h \
   routes/ShardHashFunc.cpp \
   routes/ShardHashFunc.h \
+  routes/ShardSelectionRouteFactory.h \
+  routes/ShardSelectionRouteFactory-inl.h \
+  routes/ShardSelectionRouteFactory.cpp \
   routes/ShardSplitRoute.cpp \
   routes/ShardSplitRoute.h \
   routes/ShardSplitter.cpp \
@@ -166,6 +168,7 @@ libmcroutercore_a_SOURCES = \
   routes/TimeProviderFunc.h \
   routes/WarmUpRoute.cpp \
   routes/WarmUpRoute.h \
+  RouterRegistry-impl.h \
   RoutingPrefix.cpp \
   RoutingPrefix.h \
   RuntimeVarsData.cpp \

@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -15,6 +13,7 @@
 
 #include <folly/Optional.h>
 #include <folly/io/async/AsyncSocket.h>
+#include <folly/io/async/AsyncTransport.h>
 
 #include "mcrouter/lib/network/AsyncMcServerWorkerOptions.h"
 #include "mcrouter/lib/network/ConnectionTracker.h"
@@ -60,6 +59,20 @@ class AsyncMcServerWorker {
       int fd,
       const std::shared_ptr<folly::SSLContext>& context,
       void* userCtxt = nullptr);
+
+  /**
+   * Certain situations call for a user to provide their own
+   * AsyncTransportWrapper rather than an accepted socket. Move in an
+   * externally created AsyncTransportWrapper object.
+   * onAccept() will be called if set (despite the fact that the transport may
+   * not technically have been "accepted").
+   * @return    on success, a pointer to the created session.
+   *            Note: returned session is owned by the worker. It will close
+   *                  transport before fully destroyed.
+   */
+  McServerSession* addClientTransport(
+      folly::AsyncTransportWrapper::UniquePtr transport,
+      void* userCtxt);
 
   /**
    * Install onRequest callback to call for each request.
@@ -166,7 +179,7 @@ class AsyncMcServerWorker {
   bool writesPending() const;
 
  private:
-  bool addClientSocket(folly::AsyncSocket::UniquePtr&& socket, void* userCtxt);
+  bool addClientSocket(folly::AsyncSocket::UniquePtr socket, void* userCtxt);
 
   AsyncMcServerWorkerOptions opts_;
   folly::EventBase& eventBase_;

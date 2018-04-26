@@ -1,20 +1,18 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
 
 #include <limits.h>
 
-#include <folly/Bits.h>
 #include <folly/Portability.h>
 #include <folly/Range.h>
 #include <folly/SocketAddress.h>
+#include <folly/lang/Bits.h>
 
 namespace facebook {
 namespace memcache {
@@ -32,6 +30,7 @@ constexpr folly::StringPiece kUnixSocketPrefix{"US:"};
 struct FOLLY_PACK_ATTR MessageHeader {
  public:
   constexpr static size_t kAddressMaxSize = 40;
+  constexpr static size_t kRouterNameMaxSize = 30;
 
   uint32_t magic() const {
     return folly::Endian::little(magic_);
@@ -60,6 +59,9 @@ struct FOLLY_PACK_ATTR MessageHeader {
   uint64_t timeUs() const {
     return folly::Endian::little(timeUs_);
   }
+  const char* routerName() const {
+    return routerName_;
+  }
 
   char* peerAddressModifiable() {
     return peerAddress_;
@@ -82,6 +84,9 @@ struct FOLLY_PACK_ATTR MessageHeader {
   void setTimeUs(uint64_t val) {
     timeUs_ = folly::Endian::little(val);
   }
+  char* routerNameModifiable() {
+    return routerName_;
+  }
 
   folly::SocketAddress getLocalAddress();
   folly::SocketAddress getPeerAddress();
@@ -93,7 +98,7 @@ struct FOLLY_PACK_ATTR MessageHeader {
  private:
   // Control fields
   uint32_t magic_ = folly::Endian::little<uint32_t>(0xfaceb00c);
-  uint8_t version_{3};
+  uint8_t version_{4};
 
   // Peer address fields
   char peerAddress_[kAddressMaxSize]{'\0'}; // 0-terminated string of address
@@ -113,6 +118,8 @@ struct FOLLY_PACK_ATTR MessageHeader {
 
   // Number of micro-seconds elapsed sience epoch.
   uint64_t timeUs_{0};
+
+  char routerName_[kRouterNameMaxSize]{'\0'}; // 0-terminated string of address
 };
 
 /**

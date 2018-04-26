@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -103,7 +101,20 @@ class ConfigApi : public ConfigApiIf {
    */
   virtual void stopObserving(pid_t pid) noexcept;
 
-  virtual ~ConfigApi();
+  ~ConfigApi() override;
+
+  /**
+   * Enable a behavior that forces this class to read config from
+   * backup files instead of from the original source.
+   * When this feature is enabled, the original source will only be read if
+   * the backup file is not found.
+   *
+   * NOTE: This behavior is automacally disabled after a successful config.
+   *
+   * @throw logic_error   When trying to enable this feature for configurations
+   *                      other than the first.
+   */
+  void enableReadingFromBackupFiles();
 
  protected:
   const McrouterOptions& opts_;
@@ -120,6 +131,44 @@ class ConfigApi : public ConfigApiIf {
    */
   virtual bool checkFileUpdate();
 
+  /**
+   * Save a piece of config source to disk.
+   *
+   * @param sourcePrefix  Where this config comes from (e.g. file).
+   * @param name          Name of this peice of config.
+   *                      NOTE: sourcePrefix + name should uniquely identify
+   *                      this config source.
+   * @param contents      The actual config.
+   * @param md5OrVersion  A piece of metadata that can "uniquely" identify the
+   *                      "contents" provided.
+   */
+  void dumpConfigSourceToDisk(
+      const std::string& sourcePrefix,
+      const std::string& name,
+      const std::string& contents,
+      const std::string& md5OrVersion);
+
+  /**
+   * Tells whether or not we should read config sources from backup files.
+   */
+  bool shouldReadFromBackupFiles() const;
+
+  /**
+   * Reads the given config source from backup file.
+   *
+   * @param sourcePrefix  Where this config comes from (e.g. file).
+   * @param name          Name of this peice of config.
+   * @param contents      Output parameter that will hold the content of the
+   *                      backup file
+   *
+   * @return              True if the file was read successfully.
+   *                      False otherwise.
+   */
+  bool readFromBackupFile(
+      const std::string& sourcePrefix,
+      const std::string& name,
+      std::string& contents) const;
+
  private:
   struct FileInfo {
     std::string path;
@@ -127,6 +176,7 @@ class ConfigApi : public ConfigApiIf {
     ConfigType type{ConfigType::ConfigFile};
     std::unique_ptr<FileDataProvider> provider;
     time_t lastMd5Check{0}; // last hash check in seconds since epoch
+    std::string content;
 
     bool checkMd5Changed();
   };
@@ -141,9 +191,18 @@ class ConfigApi : public ConfigApiIf {
   std::condition_variable finishCV_;
   std::atomic<bool> finish_;
 
+  // file path -> md5
+  std::unordered_map<std::string, std::string> backupFiles_;
+
   bool isFirstConfig_{true};
 
+  const bool dumpConfigToDisk_{false};
+  bool readFromBackupFiles_{false};
+  bool lastConfigFromBackupFiles_{false};
+
   void configThreadRun();
+
+  bool readFile(const std::string& path, std::string& contents);
 };
 }
 }

@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include <folly/dynamic.h>
@@ -144,5 +142,12 @@ RouteHandleFactory<RouteHandleIf>::createList(const folly::dynamic& json) {
   throwLogic(
       "RouteHandle is {}, expected object/array/string", json.typeName());
 }
+
+template <class RouteHandleIf>
+const folly::dynamic& RouteHandleFactory<RouteHandleIf>::parsePool(
+    const folly::dynamic& json) {
+  return provider_.parsePool(json);
 }
-} // facebook::memcache
+
+} // namespace memcache
+} // namespace facebook

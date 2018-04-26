@@ -1,24 +1,26 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2017-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "ExternalCarbonConnectionImpl.h"
 
+#include <memory>
+#include <mutex>
+#include <thread>
+#include <utility>
+
 #include <gflags/gflags.h>
 
-#include <folly/Baton.h>
-#include <folly/Memory.h>
 #include <folly/ScopeGuard.h>
 #include <folly/Singleton.h>
-#include <folly/ThreadName.h>
 #include <folly/fibers/EventBaseLoopController.h>
 #include <folly/fibers/FiberManager.h>
 #include <folly/io/async/EventBaseManager.h>
+#include <folly/synchronization/Baton.h>
+#include <folly/system/ThreadName.h>
 
 #include "mcrouter/lib/McResUtil.h"
 
@@ -36,7 +38,7 @@ Client::Client(
     : connectionOptions_(connectionOptions),
       options_(options),
       client_(
-          *folly::EventBaseManager::get()->getEventBase(),
+          folly::EventBaseManager::get()->getEventBase()->getVirtualEventBase(),
           connectionOptions_) {
   if (options_.maxOutstanding > 0) {
     counting_sem_init(&outstandingReqsSem_, options_.maxOutstanding);
@@ -65,7 +67,7 @@ void Client::closeNow() {
 
 ThreadInfo::ThreadInfo()
     : fiberManager_(
-          folly::make_unique<folly::fibers::EventBaseLoopController>()) {
+          std::make_unique<folly::fibers::EventBaseLoopController>()) {
   folly::Baton<> baton;
 
   thread_ = std::thread([this, &baton] {
@@ -74,7 +76,7 @@ ThreadInfo::ThreadInfo()
     folly::EventBase* evb = folly::EventBaseManager::get()->getEventBase();
     dynamic_cast<folly::fibers::EventBaseLoopController&>(
         fiberManager_.loopController())
-        .attachEventBase(*evb);
+        .attachEventBase(evb->getVirtualEventBase());
     // At this point it is safe to use fiberManager.
     baton.post();
     evb->loopForever();
@@ -84,14 +86,6 @@ ThreadInfo::ThreadInfo()
       client->closeNow();
     }
     clients_.clear();
-
-    // Drain fiber manager.
-    while (fiberManager_.hasTasks()) {
-      evb->loop();
-    }
-
-    // Drain all remaining events.
-    evb->loop();
   });
 
   // Wait until the thread is properly initialized.
@@ -121,7 +115,6 @@ void ThreadInfo::releaseClient(std::weak_ptr<Client> clientWeak) {
     if (auto client = clientWeak.lock()) {
       clients_.erase(client);
       client->closeNow();
-      assert(client.unique());
     }
   });
 }
@@ -156,7 +149,7 @@ class ThreadPool : public std::enable_shared_from_this<ThreadPool> {
 
       // If it's not running yet, then we need to start it.
       if (threads_.size() <= threadId) {
-        threads_.emplace_back(folly::make_unique<detail::ThreadInfo>());
+        threads_.emplace_back(std::make_unique<detail::ThreadInfo>());
       }
       return *threads_[threadId];
     }();
@@ -230,13 +223,13 @@ ExternalCarbonConnectionImpl::ExternalCarbonConnectionImpl(
     Options options)
     : connectionOptions_(std::move(connectionOptions)),
       options_(std::move(options)),
-      impl_(folly::make_unique<Impl>(connectionOptions_, options_)) {}
+      impl_(std::make_unique<Impl>(connectionOptions_, options_)) {}
 
 bool ExternalCarbonConnectionImpl::healthCheck() {
   try {
     return impl_->healthCheck();
   } catch (const CarbonConnectionRecreateException&) {
-    impl_ = folly::make_unique<Impl>(connectionOptions_, options_);
+    impl_ = std::make_unique<Impl>(connectionOptions_, options_);
     return impl_->healthCheck();
   }
 }

@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2014-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include <map>
@@ -14,6 +12,8 @@
 #include <vector>
 
 #include <gtest/gtest.h>
+
+#include <folly/init/Init.h>
 
 #include "mcrouter/lib/fbi/cpp/Trie.h"
 #include "mcrouter/lib/fbi/cpp/util.h"
@@ -235,8 +235,8 @@ TEST(Trie, RandTestGetPrefix) {
   for (int i = 0; i < (1 << 16); ++i) {
     auto s = facebook::memcache::randomString(1, 20);
     int need = -1;
-    for (int i = s.length(); i >= 0; --i) {
-      auto it = map.find(s.substr(0, i));
+    for (int j = s.length(); j >= 0; --j) {
+      auto it = map.find(s.substr(0, j));
       if (it != map.end()) {
         need = it->second;
         break;
@@ -281,7 +281,8 @@ TEST(Trie, Const) {
 }
 
 int main(int argc, char** argv) {
-  prepareRand();
   testing::InitGoogleTest(&argc, argv);
+  folly::init(&argc, &argv);
+  prepareRand();
   return RUN_ALL_TESTS();
 }

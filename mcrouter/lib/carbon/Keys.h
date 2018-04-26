@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -14,7 +12,7 @@
 #include <type_traits>
 
 #include <folly/Range.h>
-#include <folly/SpookyHashV2.h>
+#include <folly/hash/SpookyHashV2.h>
 #include <folly/io/IOBuf.h>
 
 namespace carbon {
@@ -108,7 +106,7 @@ class Keys {
   }
   uint32_t routingKeyHash() const {
     if (!routingKeyHash_) {
-      const auto keyPiece = fullKey();
+      const auto keyPiece = routingKey();
       routingKeyHash_ = folly::hash::SpookyHashV2::Hash32(
           keyPiece.begin(), keyPiece.size(), /* seed= */ 0);
     }

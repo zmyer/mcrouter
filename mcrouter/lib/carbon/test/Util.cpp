@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "mcrouter/lib/carbon/test/Util.h"
@@ -81,8 +79,25 @@ void expectEqTestRequest(const TestRequest& a, const TestRequest& b) {
 
   EXPECT_EQ(a.testList(), b.testList());
 
+  EXPECT_EQ(a.testNestedVec(), b.testNestedVec());
+
+  EXPECT_EQ(a.testEnumVec(), b.testEnumVec());
+
+  EXPECT_EQ(a.testUMap(), b.testUMap());
+  EXPECT_EQ(a.testMap(), b.testMap());
+  EXPECT_EQ(a.testComplexMap(), b.testComplexMap());
+
+  EXPECT_EQ(a.testUSet(), b.testUSet());
+  EXPECT_EQ(a.testSet(), b.testSet());
+
   EXPECT_EQ(a.testOptionalString(), b.testOptionalString());
   compareOptionalIobuf(a.testOptionalIobuf(), b.testOptionalIobuf());
+
+  EXPECT_EQ(a.testType().name, b.testType().name);
+  EXPECT_EQ(a.testType().points, b.testType().points);
+
+  EXPECT_EQ(a.testOptionalBool(), b.testOptionalBool());
+  EXPECT_EQ(a.testOptionalVec(), b.testOptionalVec());
 }
 
 } // util

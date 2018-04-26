@@ -1,10 +1,8 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #pragma once
@@ -13,10 +11,11 @@
 #include <algorithm>
 #include <cstring>
 #include <limits>
+#include <string>
 #include <type_traits>
 #include <utility>
-#include <vector>
 
+#include <folly/Optional.h>
 #include <folly/io/Cursor.h>
 #include <folly/io/IOBuf.h>
 #include <folly/small_vector.h>
@@ -35,16 +34,93 @@ using CarbonCursor = folly::io::Cursor;
 
 class CarbonProtocolReader {
  public:
-  explicit CarbonProtocolReader(const CarbonCursor& cursor) : cursor_(cursor) {}
+  explicit CarbonProtocolReader(const CarbonCursor& c) : cursor_(c) {}
+
+  void setCursor(const CarbonCursor& c) {
+    cursor_ = c;
+  }
+
+  const CarbonCursor& cursor() const {
+    return cursor_;
+  }
+
+  void readField(bool& b, FieldType fieldType) {
+    DCHECK(fieldType == FieldType::True || fieldType == FieldType::False)
+        << "Invalid fieldType: " << static_cast<uint8_t>(fieldType);
+    b = fieldType == FieldType::True;
+  }
+
+  void readField(folly::Optional<bool>& data, FieldType fieldType) {
+    data = folly::Optional<bool>(fieldType == FieldType::True);
+  }
 
   template <class T>
-  void readRawInto(std::vector<T>& v) {
-    v.clear();
-    const auto pr = readVectorFieldSizeAndInnerType();
+  void readField(folly::Optional<T>& data, FieldType /* fieldType */) {
+    data = folly::Optional<T>(readRaw<T>());
+  }
+
+  template <class T>
+  void readField(T& t, FieldType /* fieldType */) {
+    readRawInto(t);
+  }
+
+  template <class T>
+  typename std::enable_if<detail::IsLinearContainer<T>::value, void>::type
+  readRawInto(T& c) {
+    SerializationTraits<T>::clear(c);
+    const auto pr = readLinearContainerFieldSizeAndInnerType();
+    if (pr.first !=
+        detail::TypeToField<
+            typename SerializationTraits<T>::inner_type>::fieldType) {
+      LOG_FIRST_N(ERROR, 100) << "Type mismatch between Linear Container"
+                              << " inner type and wire type. Skipping.";
+      skipLinearContainerItems(pr);
+      return;
+    }
     const auto len = pr.second;
-    v.reserve(len);
+    SerializationTraits<T>::reserve(c, len);
     for (size_t i = 0; i < len; ++i) {
-      v.emplace_back(readRaw<T>());
+      auto inserted = SerializationTraits<T>::emplace(
+          c, readRaw<typename SerializationTraits<T>::inner_type>());
+      if (!inserted) {
+        LOG_FIRST_N(ERROR, 100) << "Item not inserted into container, possibly "
+                                << "due to a uniqueness constraint.";
+      }
+    }
+  }
+
+  template <class T>
+  typename std::enable_if<detail::IsKVContainer<T>::value, void>::type
+  readRawInto(T& m) {
+    SerializationTraits<T>::clear(m);
+    const auto pr = readKVContainerFieldSizeAndInnerTypes();
+    bool mismatch = false;
+    if (pr.first.first !=
+        detail::TypeToField<
+            typename SerializationTraits<T>::key_type>::fieldType) {
+      mismatch = true;
+      LOG_FIRST_N(ERROR, 100) << "Type mismatch between Map key type and"
+                              << " wire type. Skipping.";
+    }
+    if (pr.first.second !=
+        detail::TypeToField<
+            typename SerializationTraits<T>::mapped_type>::fieldType) {
+      mismatch = true;
+      LOG_FIRST_N(ERROR, 100) << "Type mismatch between Map value type "
+                              << "and wire type. Skipping.";
+    }
+    if (mismatch) {
+      skipKVContainerItems(pr);
+      return;
+    }
+    const auto size = pr.second;
+    SerializationTraits<T>::reserve(m, size);
+    for (size_t i = 0; i < size; ++i) {
+      auto keyValue = readRaw<typename SerializationTraits<T>::key_type>();
+      auto mappedValue =
+          readRaw<typename SerializationTraits<T>::mapped_type>();
+      SerializationTraits<T>::emplace(
+          m, std::move(keyValue), std::move(mappedValue));
     }
   }
 
@@ -72,18 +148,13 @@ class CarbonProtocolReader {
   }
 
   template <class T>
-  typename std::enable_if<detail::SerializationTraitsDefined<T>::value, void>::
-      type
-      readRawInto(T& data) {
+  typename std::enable_if<detail::IsUserReadWriteDefined<T>::value, void>::type
+  readRawInto(T& data) {
+    static_assert(
+        (SerializationTraits<T>::kWireType != FieldType::True) &&
+            (SerializationTraits<T>::kWireType != FieldType::False),
+        "Usertypes cannot have a boolean wiretype.");
     data = SerializationTraits<T>::read(*this);
-  }
-
-  // The API of readRawInto() is different than other readRawInto() member
-  // functions in order to avoid keeping state in the Reader, which would entail
-  // maintaining some extra rarely executed branches.
-  void readRawInto(bool& b, const FieldType fieldType) {
-    DCHECK(fieldType == FieldType::True || fieldType == FieldType::False);
-    b = fieldType == FieldType::True;
   }
 
   void readRawInto(bool& b) {
@@ -160,7 +231,21 @@ class CarbonProtocolReader {
     nestedStructFieldIds_.pop_back();
   }
 
-  std::pair<FieldType, uint32_t> readVectorFieldSizeAndInnerType() {
+  std::pair<std::pair<FieldType, FieldType>, uint32_t>
+  readKVContainerFieldSizeAndInnerTypes() {
+    std::pair<std::pair<FieldType, FieldType>, uint32_t> pr;
+    const auto len = readVarint<uint32_t>();
+    pr.second = len;
+    uint8_t byte = 0;
+    if (len > 0) {
+      byte = readByte();
+    }
+    pr.first.first = static_cast<FieldType>((byte & 0xf0) >> 4); // key-type
+    pr.first.second = static_cast<FieldType>(byte & 0x0f); // value-type
+    return pr;
+  }
+
+  std::pair<FieldType, uint32_t> readLinearContainerFieldSizeAndInnerType() {
     std::pair<FieldType, uint32_t> pr;
     const uint8_t byte = readByte();
     pr.first = static_cast<FieldType>(byte & 0x0f);
@@ -191,6 +276,12 @@ class CarbonProtocolReader {
   void skip(const FieldType fieldType);
 
  private:
+  void skipLinearContainer();
+  void skipLinearContainerItems(std::pair<FieldType, uint32_t> pr);
+  void skipKVContainer();
+  void skipKVContainerItems(
+      std::pair<std::pair<FieldType, FieldType>, uint32_t> pr);
+
   uint8_t readByte() {
     return cursor_.template read<uint8_t>();
   }

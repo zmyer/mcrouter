@@ -1,18 +1,16 @@
 /*
- *  Copyright (c) 2017, Facebook, Inc.
- *  All rights reserved.
+ *  Copyright (c) 2016-present, Facebook, Inc.
  *
- *  This source code is licensed under the BSD-style license found in the
- *  LICENSE file in the root directory of this source tree. An additional grant
- *  of patent rights can be found in the PATENTS file in the same directory.
+ *  This source code is licensed under the MIT license found in the LICENSE
+ *  file in the root directory of this source tree.
  *
  */
 #include "AsyncWriter.h"
 
 #include <folly/Range.h>
-#include <folly/ThreadName.h>
 #include <folly/fibers/EventBaseLoopController.h>
 #include <folly/io/async/EventBase.h>
+#include <folly/system/ThreadName.h>
 
 #include "mcrouter/AsyncWriterEntry.h"
 #include "mcrouter/McrouterLogFailure.h"
@@ -22,10 +20,9 @@ namespace facebook {
 namespace memcache {
 namespace mcrouter {
 
-AsyncWriter::AsyncWriter(size_t maxQueueSize)
-    : maxQueueSize_(maxQueueSize),
-      fiberManager_(
-          folly::make_unique<folly::fibers::EventBaseLoopController>()),
+AsyncWriter::AsyncWriter(size_t maxQueue)
+    : maxQueueSize_(maxQueue),
+      fiberManager_(std::make_unique<folly::fibers::EventBaseLoopController>()),
       eventBase_(/* enableTimeMeasurement */ false) {
   auto& c = fiberManager_.loopController();
   dynamic_cast<folly::fibers::EventBaseLoopController&>(c).attachEventBase(
@@ -51,7 +48,7 @@ void AsyncWriter::stop() noexcept {
     thread_.join();
   } else {
     while (fiberManager_.hasTasks()) {
-      fiberManager_.loopUntilNoReady();
+      eventBase_.loopOnce();
     }
   }
 }
@@ -63,15 +60,16 @@ bool AsyncWriter::start(folly::StringPiece threadName) {
   }
 
   try {
-    thread_ = std::thread([this]() {
+    thread_ = std::thread([this, threadName]() {
+      folly::setThreadName(threadName);
+
       // will return after terminateLoopSoon is called
       eventBase_.loopForever();
 
       while (fiberManager_.hasTasks()) {
-        fiberManager_.loopUntilNoReady();
+        eventBase_.loopOnce();
       }
     });
-    folly::setThreadName(thread_.native_handle(), threadName);
   } catch (const std::system_error& e) {
     LOG_FAILURE(
         "mcrouter",
@@ -91,6 +89,7 @@ bool AsyncWriter::run(std::function<void()> f) {
     return false;
   }
 
+  bool decQueueSize = false;
   if (maxQueueSize_ != 0) {
     auto size = queueSize_.load();
     do {
@@ -98,15 +97,30 @@ bool AsyncWriter::run(std::function<void()> f) {
         return false;
       }
     } while (!queueSize_.compare_exchange_weak(size, size + 1));
+    decQueueSize = true;
   }
 
-  fiberManager_.addTaskRemote([ this, f_ = std::move(f) ]() {
-    fiberManager_.runInMainContext(std::move(f_));
-    if (maxQueueSize_ != 0) {
-      --queueSize_;
-    }
-  });
+  fiberManager_.addTaskRemote(
+      [this, f_ = std::move(f), decQueueSize]() mutable {
+        fiberManager_.runInMainContext(std::move(f_));
+        if (decQueueSize) {
+          --queueSize_;
+        }
+      });
   return true;
+}
+
+void AsyncWriter::increaseMaxQueueSize(size_t add) {
+  std::lock_guard<SFRWriteLock> lock(runLock_.writeLock());
+  // Don't touch maxQueueSize_ if it's already unlimited (zero).
+  if (maxQueueSize_ != 0) {
+    maxQueueSize_ += add;
+  }
+}
+
+void AsyncWriter::makeQueueSizeUnlimited() {
+  std::lock_guard<SFRWriteLock> lock(runLock_.writeLock());
+  maxQueueSize_ = 0;
 }
 
 bool awriter_queue(AsyncWriter* w, awriter_entry_t* e) {
@@ -119,6 +133,7 @@ bool awriter_queue(AsyncWriter* w, awriter_entry_t* e) {
     e->callbacks->completed(e, r);
   });
 }
-}
-}
-} // facebook::memcache::mcrouter
+
+} // namespace mcrouter
+} // namespace memcache
+} // namespace facebook
